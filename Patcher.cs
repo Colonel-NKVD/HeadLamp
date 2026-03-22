@@ -1,22 +1,23 @@
 using HarmonyLib;
 using SDG.Unturned;
+using System.Linq;
 
 namespace HeadLamp
 {
-    [HarmonyPatch(typeof(PlayerClothing), "ReceiveToggleNightVision")]
-    public class Patch_ToggleNightVision
+    // В современных версиях Unturned функция переключения называется ReceiveToggleVisual
+    [HarmonyPatch(typeof(PlayerClothing), "ReceiveToggleVisual")]
+    public class Patch_ToggleVisual
     {
         [HarmonyPrefix]
         public static bool Prefix(PlayerClothing __instance)
         {
-            // Если ПНВ сейчас выключен, и игрок пытается его ВКЛЮЧИТЬ
-            if (!__instance.isNightVisionActive)
+            if (!__instance.isVisualToggleActive) // Пытаются включить
             {
-                if (__instance.headQuality <= 0)
-                {
-                    // Отменяем выполнение оригинального метода (фонарь не включится)
-                    return false; 
-                }
+                bool isHat = __instance.hatAsset != null && HeadLamp.Instance.Configuration.Instance.Lamps.Any(x => x.ItemID == __instance.hatAsset.id);
+                bool isGlasses = __instance.glassesAsset != null && HeadLamp.Instance.Configuration.Instance.Lamps.Any(x => x.ItemID == __instance.glassesAsset.id);
+
+                if (isHat && __instance.hatQuality <= 0) return false; // Запрещаем, если шапка сломана
+                if (isGlasses && __instance.glassesQuality <= 0) return false; // Запрещаем, если ПНВ сломано
             }
             return true;
         }
