@@ -22,7 +22,7 @@ namespace HeadLamp
         public ushort BatteryItemID; // ID предмета-батарейки (по дефолту 337)
         public List<LampSettings> Lamps;
 
-        public void Defaults()
+        public void LoadDefaults()
         {
             BatteryItemID = 337;
             Lamps = new List<LampSettings>
