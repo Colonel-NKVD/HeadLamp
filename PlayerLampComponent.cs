@@ -9,6 +9,7 @@ namespace HeadLamp
     {
         private UnturnedPlayer player;
         private float lastTick;
+        private float drainAccumulator = 0f; // Накопитель дробного расхода
 
         void Awake()
         {
@@ -17,7 +18,6 @@ namespace HeadLamp
 
         void FixedUpdate()
         {
-            // Проверяем раз в секунду для оптимизации
             if (Time.time - lastTick < 1f) return;
             lastTick = Time.time;
 
@@ -37,24 +37,33 @@ namespace HeadLamp
 
             if (config == null) return;
 
-            // Уменьшаем прочность
-            if (player.Player.clothing.headQuality > 0)
+            byte currentQuality = player.Player.clothing.headQuality;
+            if (currentQuality > 0)
             {
-                byte currentQuality = player.Player.clothing.headQuality;
-                int newValue = Mathf.Max(0, currentQuality - (int)config.DrainPerSecond);
-                
-                player.Player.clothing.headQuality = (byte)newValue;
-                
-                // Обновляем состояние у клиента
-                player.Player.clothing.sendUpdateCareful();
+                // Накапливаем расход
+                drainAccumulator += config.DrainPerSecond;
+
+                // Если накопилась хотя бы 1 единица для списания
+                if (drainAccumulator >= 1f)
+                {
+                    int dropAmount = Mathf.FloorToInt(drainAccumulator);
+                    drainAccumulator -= dropAmount; // Оставляем остаток
+
+                    byte newValue = (byte)Mathf.Max(0, currentQuality - dropAmount);
+                    player.Player.clothing.headQuality = newValue;
+                    
+                    // Обновляем сеть ТОЛЬКО при фактическом изменении значения
+                    player.Player.clothing.sendUpdateCareful();
+                }
             }
 
-            // Если разрядилось — выключаем
-            if (player.Player.clothing.headQuality <= 0)
+            // Проверяем выключение
+            if (player.Player.clothing.headQuality == 0)
             {
                 player.Player.clothing.isNightVisionActive = false;
-                player.Player.clothing.sendUpdateNightVision();
-                EffectManager.sendEffect(8, 24, player.Position); // Звук поломки/выключения
+                player.Player.clothing.sendUpdateNightVision(); // Синхронизация выключения
+                EffectManager.sendEffect(8, 24, player.Position);
+                drainAccumulator = 0f; // Сбрасываем накопитель
             }
         }
     }
