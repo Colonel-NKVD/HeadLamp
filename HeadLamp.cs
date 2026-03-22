@@ -19,13 +19,13 @@ namespace HeadLamp
 
             U.Events.OnPlayerConnected += OnPlayerConnected;
 
-            // Подхватываем игроков, которые УЖЕ на сервере (при /rocket reload)
+            // Подхватываем игроков, которые УЖЕ на сервере
             foreach (var steamPlayer in Provider.clients)
             {
                 UnturnedPlayer uPlayer = UnturnedPlayer.FromSteamPlayer(steamPlayer);
-                if (uPlayer.GameObject.GetComponent<PlayerLampComponent>() == null)
+                if (uPlayer.Player.gameObject.GetComponent<PlayerLampComponent>() == null)
                 {
-                    uPlayer.GameObject.AddComponent<PlayerLampComponent>();
+                    uPlayer.Player.gameObject.AddComponent<PlayerLampComponent>();
                 }
             }
             
@@ -37,11 +37,10 @@ namespace HeadLamp
             U.Events.OnPlayerConnected -= OnPlayerConnected;
             harmony.UnpatchAll("com.headlamp.patch");
 
-            // Зачищаем компоненты при выгрузке плагина
             foreach (var steamPlayer in Provider.clients)
             {
                 UnturnedPlayer uPlayer = UnturnedPlayer.FromSteamPlayer(steamPlayer);
-                var comp = uPlayer.GameObject.GetComponent<PlayerLampComponent>();
+                var comp = uPlayer.Player.gameObject.GetComponent<PlayerLampComponent>();
                 if (comp != null)
                 {
                     UnityEngine.Object.Destroy(comp);
@@ -51,7 +50,10 @@ namespace HeadLamp
 
         private void OnPlayerConnected(UnturnedPlayer player)
         {
-            player.GameObject.AddComponent<PlayerLampComponent>();
+            if (player.Player.gameObject.GetComponent<PlayerLampComponent>() == null)
+            {
+                player.Player.gameObject.AddComponent<PlayerLampComponent>();
+            }
         }
     }
 }
