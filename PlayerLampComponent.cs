@@ -9,7 +9,7 @@ namespace HeadLamp
     {
         private UnturnedPlayer player;
         private float lastTick;
-        private float drainAccumulator = 0f; // Накопитель дробного расхода
+        private float drainAccumulator = 0f;
 
         void Awake()
         {
@@ -21,7 +21,7 @@ namespace HeadLamp
             if (Time.time - lastTick < 1f) return;
             lastTick = Time.time;
 
-            if (player.Player.clothing.isNightVisionActive)
+            if (player.Player.clothing.isVisualToggleActive)
             {
                 CheckAndDrain();
             }
@@ -29,41 +29,51 @@ namespace HeadLamp
 
         private void CheckAndDrain()
         {
-            var headItem = player.Player.clothing.headAsset;
-            if (headItem == null) return;
+            bool isHat = false;
+            LampSettings config = null;
 
-            var config = HeadLamp.Instance.Configuration.Instance.Lamps
-                .FirstOrDefault(x => x.ItemID == headItem.id);
+            // Проверяем, надет ли нужный предмет на голове или глазах
+            if (player.Player.clothing.hatAsset != null)
+            {
+                config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == player.Player.clothing.hatAsset.id);
+                isHat = true;
+            }
 
-            if (config == null) return;
+            if (config == null && player.Player.clothing.glassesAsset != null)
+            {
+                config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == player.Player.clothing.glassesAsset.id);
+                isHat = false;
+            }
 
-            byte currentQuality = player.Player.clothing.headQuality;
+            if (config == null) return; // Предмет не найден в конфиге
+
+            byte currentQuality = isHat ? player.Player.clothing.hatQuality : player.Player.clothing.glassesQuality;
+
             if (currentQuality > 0)
             {
-                // Накапливаем расход
                 drainAccumulator += config.DrainPerSecond;
 
-                // Если накопилась хотя бы 1 единица для списания
                 if (drainAccumulator >= 1f)
                 {
                     int dropAmount = Mathf.FloorToInt(drainAccumulator);
-                    drainAccumulator -= dropAmount; // Оставляем остаток
+                    drainAccumulator -= dropAmount;
 
                     byte newValue = (byte)Mathf.Max(0, currentQuality - dropAmount);
-                    player.Player.clothing.headQuality = newValue;
                     
-                    // Обновляем сеть ТОЛЬКО при фактическом изменении значения
-                    player.Player.clothing.sendUpdateCareful();
+                    if (isHat) player.Player.clothing.hatQuality = newValue;
+                    else player.Player.clothing.glassesQuality = newValue;
                 }
             }
 
-            // Проверяем выключение
-            if (player.Player.clothing.headQuality == 0)
+            // Обновляем переменную для проверки
+            currentQuality = isHat ? player.Player.clothing.hatQuality : player.Player.clothing.glassesQuality;
+
+            if (currentQuality == 0)
             {
-                player.Player.clothing.isNightVisionActive = false;
-                player.Player.clothing.sendUpdateNightVision(); // Синхронизация выключения
+                // Принудительно выключаем через серверный метод Unturned
+                player.Player.clothing.ServerSetVisualToggleState(false);
                 EffectManager.sendEffect(8, 24, player.Position);
-                drainAccumulator = 0f; // Сбрасываем накопитель
+                drainAccumulator = 0f;
             }
         }
     }
