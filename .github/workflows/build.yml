@@ -1,0 +1,29 @@
+name: Build HeadLamp Plugin
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    runs-on: windows-2022
+    
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Setup NuGet
+      uses: NuGet/setup-nuget@v1
+
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v2
+
+    - name: Restore NuGet Packages
+      run: nuget restore HeadLamp.csproj
+
+    - name: Build Plugin
+      run: msbuild HeadLamp.csproj /p:Configuration=Release /p:TargetFramework=net48
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: HeadLamp-Release
+        path: bin/HeadLamp.dll
