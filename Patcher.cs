@@ -4,32 +4,30 @@ using System.Linq;
 
 namespace HeadLamp
 {
-    // Указываем тип метода и его параметры, чтобы Harmony точно его нашел
-    [HarmonyPatch(typeof(PlayerClothing), "ReceiveToggleVisual")]
-    public class Patch_ToggleVisual
+    // Патчим метод, который ты нашел. 
+    // Внимание: проверь в dnSpy, находится ли он в классе PlayerClothing или PlayerAnimate
+    // Скорее всего, это PlayerClothing.
+    [HarmonyPatch(typeof(PlayerClothing), "onGlassesUpdated")]
+    public class Patch_onGlassesUpdated
     {
         [HarmonyPrefix]
-        public static bool Prefix(PlayerClothing __instance, EVisualToggleType type, bool wantsOn)
+        public static void Prefix(PlayerClothing __instance, ushort id, byte quality, ref byte[] state)
         {
-            // Нас интересует только тип 1 (NonCosmetic/Headlamp/NVG)
-            // И только когда игрок хочет ВКЛЮЧИТЬ (wantsOn == true)
-            if ((int)type == 1 && wantsOn)
+            // Если id не 0 (очки надеты) и прочность 0
+            if (id != 0 && quality <= 0)
             {
-                var asset = __instance.glassesAsset;
-                if (asset != null)
+                // Проверяем, есть ли предмет в нашем конфиге
+                var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == id);
+                if (config != null)
                 {
-                    // Проверяем, есть ли этот предмет в нашем конфиге
-                    var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == asset.id);
-                    
-                    // Если предмет в конфиге и его прочность 0 — блокируем выполнение метода (return false)
-                    if (config != null && __instance.glassesQuality <= 0)
+                    // state[0] отвечает за включение (1 - вкл, 0 - выкл)
+                    // Если кто-то пытается передать включенное состояние (1), принудительно ставим 0
+                    if (state != null && state.Length > 0 && state[0] != 0)
                     {
-                        return false; 
+                        state[0] = 0; 
                     }
                 }
             }
-            // В остальных случаях (выключение или если прочность > 0) разрешаем работу
-            return true;
         }
     }
 }
