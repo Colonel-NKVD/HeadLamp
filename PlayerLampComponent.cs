@@ -28,40 +28,24 @@ namespace HeadLamp
         {
             var clothing = player.Player.clothing;
 
-            // 1. Проверяем ОЧКИ
+            // Работаем ТОЛЬКО с очками (Glasses/NVG)
             if (clothing.glassesAsset != null)
             {
-                // Проверяем наличие vision через каст
                 var asset = clothing.glassesAsset;
+                
+                // Проверяем, есть ли у очков вообще функция свечения
                 if (asset.vision != ELightingVision.NONE)
                 {
+                    // Проверяем включены ли они сейчас (байт [0] в стейте)
                     bool isVisualOn = clothing.glassesState != null && clothing.glassesState.Length > 0 && clothing.glassesState[0] != 0;
+                    
                     if (isVisualOn)
                     {
-                        DrainItem(ref clothing.glassesQuality, asset.id, false);
+                        DrainItem(ref clothing.glassesQuality, asset.id);
+                        
                         if (clothing.glassesQuality == 0)
                         {
-                            // Используем индекс (EVisualToggleType)1 вместо имени NON_COSMETIC
-                            clothing.ServerSetVisualToggleState((EVisualToggleType)1, false);
-                        }
-                    }
-                }
-            }
-
-            // 2. Проверяем ШАПКУ
-            if (clothing.hatAsset != null)
-            {
-                var asset = clothing.hatAsset;
-                // В некоторых версиях у ItemHatAsset свойство vision может быть в базовом классе или скрыто
-                // Используем прямое сравнение, если оно доступно
-                if (asset.vision != ELightingVision.NONE)
-                {
-                    bool isVisualOn = clothing.hatState != null && clothing.hatState.Length > 0 && clothing.hatState[0] != 0;
-                    if (isVisualOn)
-                    {
-                        DrainItem(ref clothing.hatQuality, asset.id, true);
-                        if (clothing.hatQuality == 0)
-                        {
+                            // Принудительно выключаем через индекс 1 (Headlamp/NVG)
                             clothing.ServerSetVisualToggleState((EVisualToggleType)1, false);
                         }
                     }
@@ -69,7 +53,7 @@ namespace HeadLamp
             }
         }
 
-        private void DrainItem(ref byte quality, ushort itemId, bool isHat)
+        private void DrainItem(ref byte quality, ushort itemId)
         {
             var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == itemId);
             float drainRate = config != null ? config.DrainPerSecond : 0.1f;
@@ -83,8 +67,7 @@ namespace HeadLamp
                     drainAccumulator -= drop;
                     quality = (byte)Mathf.Max(0, quality - drop);
 
-                    if (isHat) player.Player.clothing.sendUpdateHatQuality();
-                    else player.Player.clothing.sendUpdateGlassesQuality();
+                    player.Player.clothing.sendUpdateGlassesQuality();
                 }
             }
 
