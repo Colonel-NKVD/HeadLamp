@@ -1,5 +1,4 @@
 using HarmonyLib;
-using Rocket.Core.Logging;
 using Rocket.Core.Plugins;
 using Rocket.Unturned;
 using Rocket.Unturned.Events;
@@ -7,6 +6,7 @@ using Rocket.Unturned.Player;
 using SDG.Unturned;
 using System.Reflection;
 using UnityEngine;
+using System.Linq;
 
 namespace HeadLamp
 {
@@ -20,12 +20,12 @@ namespace HeadLamp
         {
             Instance = this;
 
-            // 1. Инициализация Harmony и ручной патч
+            // 1. Инициализация Harmony вручную через Reflection
             try
             {
                 harmony = new Harmony(HarmonyId);
                 
-                // Ищем тот самый приватный метод в PlayerClothing
+                // Ищем приватный метод в PlayerClothing
                 var original = typeof(PlayerClothing).GetMethod("onGlassesUpdated", 
                     BindingFlags.Instance | BindingFlags.NonPublic);
                 
@@ -36,27 +36,26 @@ namespace HeadLamp
                 if (original != null && prefix != null)
                 {
                     harmony.Patch(original, new HarmonyMethod(prefix));
-                    Logger.Log("HeadLamp: Harmony patch 'onGlassesUpdated' applied successfully!", Color.green);
+                    Rocket.Core.Logging.Logger.Log("HeadLamp: Harmony patch applied successfully!");
                 }
                 else
                 {
-                    Logger.LogError("HeadLamp: Critical error - method 'onGlassesUpdated' or Prefix not found!");
+                    Rocket.Core.Logging.Logger.LogError("HeadLamp: Critical error - method 'onGlassesUpdated' not found!");
                 }
             }
             catch (System.Exception ex)
             {
-                Logger.LogError("HeadLamp: Failed to apply Harmony patches: " + ex.Message);
+                Rocket.Core.Logging.Logger.LogError("HeadLamp: Failed to apply Harmony patches: " + ex.Message);
             }
 
             // 2. Подписка на события игрока
             U.Events.OnPlayerConnected += OnPlayerConnected;
 
-            Logger.Log("HeadLamp Plugin by Gemini & User loaded!");
+            Rocket.Core.Logging.Logger.Log("HeadLamp Plugin loaded!");
         }
 
         protected override void Unload()
         {
-            // Убираем патчи при выключении плагина
             if (harmony != null)
             {
                 harmony.UnpatchAll(HarmonyId);
@@ -64,15 +63,15 @@ namespace HeadLamp
 
             U.Events.OnPlayerConnected -= OnPlayerConnected;
             
-            Logger.Log("HeadLamp Plugin unloaded.");
+            Rocket.Core.Logging.Logger.Log("HeadLamp Plugin unloaded.");
         }
 
         private void OnPlayerConnected(UnturnedPlayer player)
         {
-            // Добавляем компонент, который будет отвечать за разрядку
-            if (player.GameObject.GetComponent<PlayerLampComponent>() == null)
+            // У UnturnedPlayer объект находится в player.Player.gameObject
+            if (player.Player.gameObject.GetComponent<PlayerLampComponent>() == null)
             {
-                player.GameObject.AddComponent<PlayerLampComponent>();
+                player.Player.gameObject.AddComponent<PlayerLampComponent>();
             }
         }
     }
