@@ -21,8 +21,8 @@ namespace HeadLamp
             if (Time.time - lastTick < 1f) return;
             lastTick = Time.time;
 
-            // Используем новый метод проверки состояния ПНВ/Фонаря
-            if (player.Player.clothing.isVisualToggleActive(EVisualToggleType.Headlamp))
+            // Проверка через NON_COSMETIC
+            if (player.Player.clothing.isVisualToggleActive(EVisualToggleType.NON_COSMETIC))
             {
                 CheckAndDrain();
             }
@@ -62,6 +62,10 @@ namespace HeadLamp
                     
                     if (isHat) player.Player.clothing.hatQuality = newValue;
                     else player.Player.clothing.glassesQuality = newValue;
+
+                    // Обновляем визуально для всех
+                    player.Player.clothing.sendUpdateHatQuality();
+                    player.Player.clothing.sendUpdateGlassesQuality();
                 }
             }
 
@@ -69,8 +73,10 @@ namespace HeadLamp
 
             if (currentQuality == 0)
             {
-                // Указываем тип (Headlamp) и состояние (false)
-                player.Player.clothing.ServerSetVisualToggleState(EVisualToggleType.Headlamp, false);
+                // Выключаем через NON_COSMETIC
+                player.Player.clothing.ServerSetVisualToggleState(EVisualToggleType.NON_COSMETIC, false);
+                
+                // Проигрываем звук поломки (ID 8 - стандартный звук искр/поломки)
                 EffectManager.sendEffect(8, 24, player.Position);
                 drainAccumulator = 0f;
             }
