@@ -1,7 +1,11 @@
 using SDG.Unturned;
+using SDG.NetTransport;
 using UnityEngine;
 using Rocket.Unturned.Player;
+using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 
 namespace HeadLamp
 {
@@ -11,9 +15,36 @@ namespace HeadLamp
         private float lastTick;
         private float drainAccumulator = 0f;
 
+        // Кэшируем метод и поле для скорости
+        private static object sendWearGlassesInstance;
+        private static MethodInfo sendWearGlassesInvoke;
+
         void Awake()
         {
             player = UnturnedPlayer.FromPlayer(GetComponent<Player>());
+
+            // Инициализируем доступ к приватному методу SendWearGlasses один раз
+            if (sendWearGlassesInvoke == null)
+            {
+                var field = typeof(PlayerClothing).GetField("SendWearGlasses", BindingFlags.NonPublic | BindingFlags.Static);
+                if (field != null)
+                {
+                    sendWearGlassesInstance = field.GetValue(null);
+                    if (sendWearGlassesInstance != null)
+                    {
+                        // Ищем метод Invoke(ENetReliability, List<ITransportConnection>, Guid, byte, byte[], bool)
+                        sendWearGlassesInvoke = sendWearGlassesInstance.GetType().GetMethod("Invoke", new Type[] 
+                        { 
+                            typeof(ENetReliability), 
+                            typeof(List<ITransportConnection>), 
+                            typeof(Guid), 
+                            typeof(byte), 
+                            typeof(byte[]), 
+                            typeof(bool) 
+                        });
+                    }
+                }
+            }
         }
 
         void FixedUpdate()
@@ -29,19 +60,16 @@ namespace HeadLamp
             var clothing = player.Player.clothing;
             if (clothing.glassesAsset == null) return;
 
-            // Проверяем включен ли свет (байт [0] не равен 0)
             bool isVisualOn = clothing.glassesState != null && clothing.glassesState.Length > 0 && clothing.glassesState[0] != 0;
 
             if (isVisualOn)
             {
-                // Если включено, но прочности 0 — выключаем принудительно
                 if (clothing.glassesQuality == 0)
                 {
                     ForceOff(clothing);
                     return;
                 }
 
-                // Логика разряда
                 var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == clothing.glassesAsset.id);
                 float drainRate = config != null ? config.DrainPerSecond : 0.1f;
 
@@ -55,7 +83,7 @@ namespace HeadLamp
                     {
                         clothing.glassesQuality = 0;
                         clothing.sendUpdateGlassesQuality();
-                        ForceOff(clothing); // Сначала 0 прочности, потом выключаем
+                        ForceOff(clothing);
                     }
                     else
                     {
@@ -68,20 +96,37 @@ namespace HeadLamp
 
         private void ForceOff(PlayerClothing clothing)
         {
-            if (clothing.glassesState == null || clothing.glassesState.Length == 0) return;
+            if (clothing.glassesAsset == null || clothing.glassesState == null || clothing.glassesState.Length == 0) return;
 
-            // 1. Меняем состояние на "выключено"
+            // 1. Создаем НОВЫЙ массив состояния, чтобы игра точно увидела изменения
+            byte[] newState = new byte[clothing.glassesState.Length];
+            Array.Copy(clothing.glassesState, newState, clothing.glassesState.Length);
+            newState[0] = 0; // Выключаем
+
+            // Обновляем состояние на сервере
             clothing.glassesState[0] = 0;
 
-            // 2. ЯДЕРНЫЙ МЕТОД: Используем встроенный метод синхронизации "всего сразу"
-            // Мы вызываем обновление очков так, будто игрок их только что надел.
-            // Это гарантированно заставит клиент пересчитать updateVision()
-            clothing.updateGlasses(clothing.glasses, clothing.glassesQuality, clothing.glassesState);
+            // 2. ОТПРАВЛЯЕМ ПАКЕТ (RPC)
+            // Это заставит клиент перерисовать очки и вызвать updateVision()
+            if (sendWearGlassesInvoke != null)
+            {
+                try
+                {
+                    sendWearGlassesInvoke.Invoke(sendWearGlassesInstance, new object[] 
+                    { 
+                        ENetReliability.Reliable, 
+                        Provider.GatherRemoteClientConnections(), 
+                        clothing.glassesAsset.GUID, 
+                        clothing.glassesQuality, 
+                        newState, 
+                        false 
+                    });
+                }
+                catch (Exception) { /* Игнорируем ошибки рефлексии */ }
+            }
 
-            // 3. Дополнительно шлем пакет на переключение визуала (для ПНВ)
+            // 3. Дополнительные попытки для разных типов предметов
             clothing.ServerSetVisualToggleState((EVisualToggleType)1, false);
-
-            // 4. Гасим фонари локально (для тех кто рядом)
             player.Player.updateGlassesLights(false);
 
 #pragma warning disable CS0618
