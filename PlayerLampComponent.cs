@@ -1,7 +1,8 @@
 using SDG.Unturned;
-using SDG.NetTransport; // Важно: это лечит ошибку ENetReliability
+using SDG.NetTransport;
 using UnityEngine;
 using Rocket.Unturned.Player;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -14,26 +15,33 @@ namespace HeadLamp
         private float lastTick;
         private float drainAccumulator = 0f;
 
-        // Кэшируем метод для отправки пакета
-        private static MethodInfo sendVisualToggleStateMethod;
-        private static object clientInstanceMethodObject;
+        // Кэшируем метод полной синхронизации очков
+        private static MethodInfo sendWearGlassesMethod;
+        private static object sendWearGlassesObject;
 
         void Awake()
         {
             player = UnturnedPlayer.FromPlayer(GetComponent<Player>());
 
-            // Инициализируем Reflection только один раз для всех компонентов (static)
-            if (sendVisualToggleStateMethod == null)
+            if (sendWearGlassesMethod == null)
             {
-                var fieldInfo = typeof(PlayerClothing).GetField("SendVisualToggleState", BindingFlags.NonPublic | BindingFlags.Static);
+                // Ищем SendWearGlasses — это самый надежный способ обновить предмет у всех
+                var fieldInfo = typeof(PlayerClothing).GetField("SendWearGlasses", BindingFlags.NonPublic | BindingFlags.Static);
                 if (fieldInfo != null)
                 {
-                    clientInstanceMethodObject = fieldInfo.GetValue(null);
-                    if (clientInstanceMethodObject != null)
+                    sendWearGlassesObject = fieldInfo.GetValue(null);
+                    if (sendWearGlassesObject != null)
                     {
-                        // Ищем метод Invoke, не привязываясь к конкретным типам в GetMethod, чтобы избежать ошибок компиляции
-                        sendVisualToggleStateMethod = clientInstanceMethodObject.GetType().GetMethods()
-                            .FirstOrDefault(m => m.Name == "Invoke" && m.GetParameters().Length == 4);
+                        // Пакет принимает: Reliable, Connections, Guid, Quality, State, PlayEffect
+                        sendWearGlassesMethod = sendWearGlassesObject.GetType().GetMethod("Invoke", new Type[] 
+                        { 
+                            typeof(ENetReliability), 
+                            typeof(List<ITransportConnection>), 
+                            typeof(Guid), 
+                            typeof(byte), 
+                            typeof(byte[]), 
+                            typeof(bool) 
+                        });
                     }
                 }
             }
@@ -52,50 +60,35 @@ namespace HeadLamp
             var clothing = player.Player.clothing;
             if (clothing.glassesAsset == null) return;
 
-            if (clothing.glassesAsset.vision != ELightingVision.NONE)
+            // Проверяем включен ли прибор (байт 0)
+            bool isVisualOn = clothing.glassesState != null && clothing.glassesState.Length > 0 && clothing.glassesState[0] != 0;
+
+            if (isVisualOn)
             {
-                bool isVisualOn = clothing.glassesState != null && clothing.glassesState.Length > 0 && clothing.glassesState[0] != 0;
-                
-                if (isVisualOn)
+                // Если прочность 0, но он горит — гасим немедленно
+                if (clothing.glassesQuality == 0)
                 {
-                    if (clothing.glassesQuality == 0)
-                    {
-                        ForceOff(clothing);
-                        return;
-                    }
-
-                    DrainItem(clothing, clothing.glassesAsset.id);
+                    ForceOff(clothing);
+                    return;
                 }
-            }
-        }
 
-        private void DrainItem(PlayerClothing clothing, ushort itemId)
-        {
-            var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == itemId);
-            float drainRate = config != null ? config.DrainPerSecond : 0.1f;
+                var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == clothing.glassesAsset.id);
+                float drainRate = config != null ? config.DrainPerSecond : 0.1f;
 
-            if (clothing.glassesQuality > 0)
-            {
-                drainAccumulator += (drainRate * 0.5f); 
+                drainAccumulator += (drainRate * 0.5f);
                 if (drainAccumulator >= 1f)
                 {
                     int drop = Mathf.FloorToInt(drainAccumulator);
                     drainAccumulator -= drop;
-                    
+
                     if (clothing.glassesQuality <= drop)
                     {
-                        ForceOff(clothing); // Сначала выключаем визуал
-                        
                         clothing.glassesQuality = 0;
-                        clothing.sendUpdateGlassesQuality();
-
-#pragma warning disable CS0618
-                        EffectManager.sendEffect(8, 24, player.Position);
-#pragma warning restore CS0618
+                        ForceOff(clothing);
                     }
                     else
                     {
-                        clothing.glassesQuality = (byte)(clothing.glassesQuality - drop);
+                        clothing.glassesQuality -= (byte)drop;
                         clothing.sendUpdateGlassesQuality();
                     }
                 }
@@ -104,36 +97,45 @@ namespace HeadLamp
 
         private void ForceOff(PlayerClothing clothing)
         {
+            if (clothing.glassesAsset == null) return;
+
+            // 1. Принудительно гасим байт в стейте
             if (clothing.glassesState != null && clothing.glassesState.Length > 0)
             {
-                // 1. Меняем состояние в памяти сервера
                 clothing.glassesState[0] = 0;
-
-                // 2. Отправляем RPC пакет через найденный ClientInstanceMethod
-                if (sendVisualToggleStateMethod != null && clientInstanceMethodObject != null)
-                {
-                    try 
-                    {
-                        // Вызов: Invoke(Reliable, Connections, Type, State)
-                        sendVisualToggleStateMethod.Invoke(clientInstanceMethodObject, new object[] 
-                        { 
-                            ENetReliability.Reliable, 
-                            Provider.GatherRemoteClientConnections(), 
-                            (EVisualToggleType)1, 
-                            false 
-                        });
-                    }
-                    catch { /* Если не вышло через Reflection, попробуем ванильный метод */ }
-                }
-                
-                // 3. Запасной/дублирующий вариант
-                clothing.ServerSetVisualToggleState((EVisualToggleType)1, false);
-
-                // 4. Локальное обновление для самого игрока
-                player.Player.updateGlassesLights(false);
-
-                drainAccumulator = 0f;
             }
+
+            // 2. ПОЛНАЯ СИНХРОНИЗАЦИЯ (Force Refresh)
+            // Мы вызываем метод, который заставляет всех клиентов перерисовать очки игрока
+            if (sendWearGlassesMethod != null && sendWearGlassesObject != null)
+            {
+                try
+                {
+                    sendWearGlassesMethod.Invoke(sendWearGlassesObject, new object[] 
+                    { 
+                        ENetReliability.Reliable, 
+                        Provider.GatherRemoteClientConnections(), 
+                        clothing.glassesAsset.GUID, // Используем GUID ассета
+                        clothing.glassesQuality, 
+                        clothing.glassesState, 
+                        false // Не играть звук надевания
+                    });
+                }
+                catch (Exception)
+                {
+                    // Если основной метод не сработал, пробуем ванильный переключатель
+                    clothing.ServerSetVisualToggleState((EVisualToggleType)1, false);
+                }
+            }
+
+            // 3. Дополнительно гасим локальные источники света
+            player.Player.updateGlassesLights(false);
+            
+#pragma warning disable CS0618
+            EffectManager.sendEffect(8, 24, player.Position);
+#pragma warning restore CS0618
+
+            drainAccumulator = 0f;
         }
     }
 }
