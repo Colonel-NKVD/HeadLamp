@@ -18,8 +18,8 @@ namespace HeadLamp
 
         void FixedUpdate()
         {
-            // Проверка раз в 1 секунду для экономии ресурсов
-            if (Time.time - lastTick < 1f) return;
+            // Увеличим частоту проверки до 0.5с для лучшего отклика
+            if (Time.time - lastTick < 0.5f) return;
             lastTick = Time.time;
 
             CheckAndDrain();
@@ -29,27 +29,23 @@ namespace HeadLamp
         {
             var clothing = player.Player.clothing;
 
-            // Работаем ТОЛЬКО с очками (Glasses/NVG)
             if (clothing.glassesAsset != null)
             {
                 var asset = clothing.glassesAsset;
                 
-                // Проверяем, есть ли у очков вообще функция свечения (ПНВ или фонарь)
                 if (asset.vision != ELightingVision.NONE)
                 {
-                    // Проверяем включены ли они сейчас (байт [0] в стейте: 1 - вкл, 0 - выкл)
+                    // Проверяем включен ли прибор
                     bool isVisualOn = clothing.glassesState != null && clothing.glassesState.Length > 0 && clothing.glassesState[0] != 0;
                     
                     if (isVisualOn)
                     {
-                        // ПАТЧ: Если включено, но прочность уже 0 — выключаем немедленно
                         if (clothing.glassesQuality == 0)
                         {
                             ForceOff(clothing);
                             return;
                         }
 
-                        // Иначе — разряжаем
                         DrainItem(clothing, asset.id);
                     }
                 }
@@ -63,17 +59,16 @@ namespace HeadLamp
 
             if (clothing.glassesQuality > 0)
             {
-                drainAccumulator += drainRate;
+                // Умножаем на 0.5, так как тик теперь каждые 0.5с
+                drainAccumulator += (drainRate * 0.5f); 
                 if (drainAccumulator >= 1f)
                 {
                     int drop = Mathf.FloorToInt(drainAccumulator);
                     drainAccumulator -= drop;
                     
-                    // Уменьшаем прочность
                     clothing.glassesQuality = (byte)Mathf.Max(0, clothing.glassesQuality - drop);
                     clothing.sendUpdateGlassesQuality();
 
-                    // Если после уменьшения стало 0 — выключаем
                     if (clothing.glassesQuality == 0)
                     {
                         ForceOff(clothing);
@@ -87,15 +82,15 @@ namespace HeadLamp
         {
             if (clothing.glassesState != null && clothing.glassesState.Length > 0)
             {
-                // 1. Прямая перезапись байта состояния (0 = выключено)
+                // 1. Обнуляем байт включения
                 clothing.glassesState[0] = 0;
 
-                // 2. Важнейший метод: заставляет сервер отправить обновленный стейт всем клиентам
-                // Именно это выключает визуальный свет/ПНВ у игрока
-                clothing.sendUpdateGlassesState();
+                // 2. Синхронизируем состояние очков (ID, Качество, Состояние)
+                // В твоей версии это правильный метод для обновления всего ассета очков
+                clothing.sendUpdateGlasses();
 
-                // Дополнительный вызов для надежности (если доступен в API)
-                // player.Player.updateGlassesLights(false); 
+                // 3. Вызываем отключение света (из твоего декомпилятора)
+                player.Player.updateGlassesLights(false);
 
                 drainAccumulator = 0f;
             }
