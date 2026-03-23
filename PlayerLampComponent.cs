@@ -15,25 +15,25 @@ namespace HeadLamp
         private float lastTick;
         private float drainAccumulator = 0f;
 
-        // Кэшируем метод и поле для скорости
-        private static object sendWearGlassesInstance;
+        // Кэшируем метод SendWearGlasses, который ты нашел в дампе
+        private static object sendWearGlassesObject;
         private static MethodInfo sendWearGlassesInvoke;
 
         void Awake()
         {
             player = UnturnedPlayer.FromPlayer(GetComponent<Player>());
 
-            // Инициализируем доступ к приватному методу SendWearGlasses один раз
             if (sendWearGlassesInvoke == null)
             {
+                // Достаем приватный ClientInstanceMethod из PlayerClothing
                 var field = typeof(PlayerClothing).GetField("SendWearGlasses", BindingFlags.NonPublic | BindingFlags.Static);
                 if (field != null)
                 {
-                    sendWearGlassesInstance = field.GetValue(null);
-                    if (sendWearGlassesInstance != null)
+                    sendWearGlassesObject = field.GetValue(null);
+                    if (sendWearGlassesObject != null)
                     {
-                        // Ищем метод Invoke(ENetReliability, List<ITransportConnection>, Guid, byte, byte[], bool)
-                        sendWearGlassesInvoke = sendWearGlassesInstance.GetType().GetMethod("Invoke", new Type[] 
+                        // Параметры: ENetReliability, List<ITransportConnection>, Guid, byte, byte[], bool
+                        sendWearGlassesInvoke = sendWearGlassesObject.GetType().GetMethod("Invoke", new Type[] 
                         { 
                             typeof(ENetReliability), 
                             typeof(List<ITransportConnection>), 
@@ -60,10 +60,12 @@ namespace HeadLamp
             var clothing = player.Player.clothing;
             if (clothing.glassesAsset == null) return;
 
+            // Проверяем, горит ли лампа (байт [0] в glassesState)
             bool isVisualOn = clothing.glassesState != null && clothing.glassesState.Length > 0 && clothing.glassesState[0] != 0;
 
             if (isVisualOn)
             {
+                // Если прочность уже 0, но лампа горит — тушим
                 if (clothing.glassesQuality == 0)
                 {
                     ForceOff(clothing);
@@ -83,7 +85,7 @@ namespace HeadLamp
                     {
                         clothing.glassesQuality = 0;
                         clothing.sendUpdateGlassesQuality();
-                        ForceOff(clothing);
+                        ForceOff(clothing); // Тушим при достижении 0%
                     }
                     else
                     {
@@ -96,36 +98,35 @@ namespace HeadLamp
 
         private void ForceOff(PlayerClothing clothing)
         {
-            if (clothing.glassesAsset == null || clothing.glassesState == null || clothing.glassesState.Length == 0) return;
+            if (clothing.glassesAsset == null) return;
 
-            // 1. Создаем НОВЫЙ массив состояния, чтобы игра точно увидела изменения
-            byte[] newState = new byte[clothing.glassesState.Length];
-            Array.Copy(clothing.glassesState, newState, clothing.glassesState.Length);
-            newState[0] = 0; // Выключаем
-
-            // Обновляем состояние на сервере
+            // 1. Подготавливаем состояние "Выключено"
+            if (clothing.glassesState == null || clothing.glassesState.Length == 0)
+            {
+                clothing.glassesState = new byte[1];
+            }
             clothing.glassesState[0] = 0;
 
-            // 2. ОТПРАВЛЯЕМ ПАКЕТ (RPC)
-            // Это заставит клиент перерисовать очки и вызвать updateVision()
-            if (sendWearGlassesInvoke != null)
+            // 2. ИСПОЛЬЗУЕМ ТВОЕ НАБЛЮДЕНИЕ: "Переодеваем" очки через RPC
+            // Это заставит всех клиентов (включая владельца) вызвать updateVision()
+            if (sendWearGlassesInvoke != null && sendWearGlassesObject != null)
             {
                 try
                 {
-                    sendWearGlassesInvoke.Invoke(sendWearGlassesInstance, new object[] 
+                    sendWearGlassesInvoke.Invoke(sendWearGlassesObject, new object[] 
                     { 
                         ENetReliability.Reliable, 
                         Provider.GatherRemoteClientConnections(), 
                         clothing.glassesAsset.GUID, 
                         clothing.glassesQuality, 
-                        newState, 
-                        false 
+                        clothing.glassesState, 
+                        false // Не проигрывать звук надевания, чтобы не спамить
                     });
                 }
-                catch (Exception) { /* Игнорируем ошибки рефлексии */ }
+                catch (Exception) { /* Ошибка Reflection */ }
             }
 
-            // 3. Дополнительные попытки для разных типов предметов
+            // 3. Дублируем стандартными методами для надежности
             clothing.ServerSetVisualToggleState((EVisualToggleType)1, false);
             player.Player.updateGlassesLights(false);
 
