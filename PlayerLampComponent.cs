@@ -3,6 +3,7 @@ using UnityEngine;
 using Rocket.Unturned.Player;
 using System;
 using System.Linq;
+using System.Reflection;
 
 namespace HeadLamp
 {
@@ -12,9 +13,20 @@ namespace HeadLamp
         private float lastTick;
         private float drainAccumulator = 0f;
 
+        // Кэшируем методы HumanClothes для производительности
+        private static FieldInfo glassesGuidField;
+        private static MethodInfo applyMethod;
+
         void Awake()
         {
             player = UnturnedPlayer.FromPlayer(GetComponent<Player>());
+
+            // Находим поле glassesGuid и метод apply в классе HumanClothes
+            if (applyMethod == null)
+            {
+                glassesGuidField = typeof(HumanClothes).GetField("glassesGuid", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                applyMethod = typeof(HumanClothes).GetMethod("apply", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            }
         }
 
         void FixedUpdate()
@@ -30,7 +42,7 @@ namespace HeadLamp
             var clothing = player.Player.clothing;
             if (clothing.glassesAsset == null) return;
 
-            // Проверяем включен ли свет
+            // Проверяем включен ли фонарь (байт 0 состояния)
             bool isVisualOn = clothing.glassesState != null && clothing.glassesState.Length > 0 && clothing.glassesState[0] != 0;
 
             if (isVisualOn)
@@ -67,45 +79,51 @@ namespace HeadLamp
 
         private void ForceOff(PlayerClothing clothing)
         {
-            if (clothing.glassesAsset == null) return;
+            if (clothing.thirdClothes == null || clothing.glassesAsset == null) return;
 
-            // 1. Сохраняем данные текущих очков
-            Guid currentGuid = clothing.glassesGuid;
-            byte currentQuality = clothing.glassesQuality;
-            
-            // Создаем выключенный стейт
-            byte[] newState = new byte[clothing.glassesState.Length];
-            Array.Copy(clothing.glassesState, newState, clothing.glassesState.Length);
-            newState[0] = 0; 
+            try
+            {
+                // 1. Сохраняем текущий Guid
+                Guid currentGuid = clothing.glassesAsset.GUID;
 
-            // 2. ЖЕСТКИЙ СБРОС (Force Re-apply)
-            // Убираем GUID очков из системы одежды сервера
-            clothing.glassesGuid = Guid.Empty;
-            clothing.glassesState = new byte[0];
-            
-            // Применяем изменения (это заставит сервер послать пакет "очков нет")
-            clothing.apply();
+                // 2. Создаем выключенное состояние (стейт)
+                byte[] offState = new byte[clothing.glassesState.Length];
+                Array.Copy(clothing.glassesState, offState, clothing.glassesState.Length);
+                offState[0] = 0;
 
-            // 3. Возвращаем очки обратно с выключенным состоянием
-            clothing.glassesGuid = currentGuid;
-            clothing.glassesQuality = currentQuality;
-            clothing.glassesState = newState;
+                // 3. Обновляем данные в PlayerClothing (серверная часть)
+                clothing.glassesState = offState;
 
-            // Снова применяем (сервер пошлет пакет "надеты новые очки")
-            clothing.apply();
+                // 4. "СБРОС" через HumanClothes (визуальная часть)
+                // Имитируем снятие очков
+                glassesGuidField?.SetValue(clothing.thirdClothes, Guid.Empty);
+                applyMethod?.Invoke(clothing.thirdClothes, null);
 
-            // 4. Дополнительная синхронизация через старые методы
-            clothing.ServerSetVisualToggleState((EVisualToggleType)1, false);
-            player.Player.updateGlassesLights(false);
+                // Имитируем надевание очков обратно с новым состоянием
+                glassesGuidField?.SetValue(clothing.thirdClothes, currentGuid);
+                // Важно: в некоторых версиях нужно также обновить glassesState в thirdClothes
+                var stateField = typeof(HumanClothes).GetField("glassesState", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Public);
+                stateField?.SetValue(clothing.thirdClothes, offState);
+
+                applyMethod?.Invoke(clothing.thirdClothes, null);
+
+                // 5. Принудительная отправка пакета визуального состояния
+                clothing.ServerSetVisualToggleState((EVisualToggleType)1, false);
+                player.Player.updateGlassesLights(false);
+                
+                // Синхронизируем изменения с клиентами (важно!)
+                clothing.sendUpdateGlassesQuality(); 
+            }
+            catch (Exception ex)
+            {
+                Rocket.Core.Logging.Logger.LogError("Ошибка принудительного выключения: " + ex.Message);
+            }
 
 #pragma warning disable CS0618
             EffectManager.sendEffect(8, 24, player.Position);
 #pragma warning restore CS0618
 
             drainAccumulator = 0f;
-            
-            // Логируем для отладки в консоль сервера (удали потом, если мешает)
-            // Rocket.Core.Logging.Logger.Log($"[HeadLamp] Forced OFF for {player.CharacterName}");
         }
     }
 }
