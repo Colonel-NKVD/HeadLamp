@@ -15,7 +15,7 @@ namespace HeadLamp
         private float lastTick;
         private float drainAccumulator = 0f;
 
-        // Кэшируем метод SendWearGlasses, который ты нашел в дампе
+        // Кэшируем методы для работы с сетевым кодом через Reflection
         private static object sendWearGlassesObject;
         private static MethodInfo sendWearGlassesInvoke;
 
@@ -23,16 +23,16 @@ namespace HeadLamp
         {
             player = UnturnedPlayer.FromPlayer(GetComponent<Player>());
 
+            // Инициализация доступа к SendWearGlasses (один раз на весь запуск сервера)
             if (sendWearGlassesInvoke == null)
             {
-                // Достаем приватный ClientInstanceMethod из PlayerClothing
                 var field = typeof(PlayerClothing).GetField("SendWearGlasses", BindingFlags.NonPublic | BindingFlags.Static);
                 if (field != null)
                 {
                     sendWearGlassesObject = field.GetValue(null);
                     if (sendWearGlassesObject != null)
                     {
-                        // Параметры: ENetReliability, List<ITransportConnection>, Guid, byte, byte[], bool
+                        // Сигнатура из твоего дампа: Guid, byte (quality), byte[] (state), bool (playEffect)
                         sendWearGlassesInvoke = sendWearGlassesObject.GetType().GetMethod("Invoke", new Type[] 
                         { 
                             typeof(ENetReliability), 
@@ -49,6 +49,7 @@ namespace HeadLamp
 
         void FixedUpdate()
         {
+            // Проверка раз в 0.5 сек для оптимизации
             if (Time.time - lastTick < 0.5f) return;
             lastTick = Time.time;
 
@@ -60,18 +61,19 @@ namespace HeadLamp
             var clothing = player.Player.clothing;
             if (clothing.glassesAsset == null) return;
 
-            // Проверяем, горит ли лампа (байт [0] в glassesState)
+            // Проверяем, горит ли лампа (первый байт состояния)
             bool isVisualOn = clothing.glassesState != null && clothing.glassesState.Length > 0 && clothing.glassesState[0] != 0;
 
             if (isVisualOn)
             {
-                // Если прочность уже 0, но лампа горит — тушим
+                // Если заряд уже на нуле, но свет горит — принудительно гасим
                 if (clothing.glassesQuality == 0)
                 {
                     ForceOff(clothing);
                     return;
                 }
 
+                // Получаем скорость разряда из конфига
                 var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == clothing.glassesAsset.id);
                 float drainRate = config != null ? config.DrainPerSecond : 0.1f;
 
@@ -85,7 +87,7 @@ namespace HeadLamp
                     {
                         clothing.glassesQuality = 0;
                         clothing.sendUpdateGlassesQuality();
-                        ForceOff(clothing); // Тушим при достижении 0%
+                        ForceOff(clothing); // Гасим свет ПЕРЕД окончательной установкой 0
                     }
                     else
                     {
@@ -100,34 +102,52 @@ namespace HeadLamp
         {
             if (clothing.glassesAsset == null) return;
 
-            // 1. Подготавливаем состояние "Выключено"
-            if (clothing.glassesState == null || clothing.glassesState.Length == 0)
-            {
-                clothing.glassesState = new byte[1];
-            }
-            clothing.glassesState[0] = 0;
+            // Сохраняем данные текущего предмета
+            Guid itemGuid = clothing.glassesAsset.GUID;
+            byte[] offState = new byte[clothing.glassesState?.Length ?? 1];
+            for (int i = 0; i < offState.Length; i++) offState[i] = 0; // Состояние "Всё выключено"
 
-            // 2. ИСПОЛЬЗУЕМ ТВОЕ НАБЛЮДЕНИЕ: "Переодеваем" очки через RPC
-            // Это заставит всех клиентов (включая владельца) вызвать updateVision()
+            // 1. Обновляем данные на сервере
+            clothing.glassesState = offState;
+
+            // 2. РЕАЛИЗАЦИЯ ТВОЕГО НАБЛЮДЕНИЯ: "Виртуальный Свап"
             if (sendWearGlassesInvoke != null && sendWearGlassesObject != null)
             {
                 try
                 {
+                    var connections = Provider.GatherRemoteClientConnections();
+
+                    // ШАГ А: Отправляем пакет "Снять очки" (пустой GUID)
                     sendWearGlassesInvoke.Invoke(sendWearGlassesObject, new object[] 
                     { 
                         ENetReliability.Reliable, 
-                        Provider.GatherRemoteClientConnections(), 
-                        clothing.glassesAsset.GUID, 
-                        clothing.glassesQuality, 
-                        clothing.glassesState, 
-                        false // Не проигрывать звук надевания, чтобы не спамить
+                        connections, 
+                        Guid.Empty, 
+                        (byte)0, 
+                        new byte[0], 
+                        false 
+                    });
+
+                    // ШАГ Б: Мгновенно отправляем пакет "Надеть очки" (с нашими данными)
+                    // Это заставит клиент пересоздать все визуальные объекты фонаря
+                    sendWearGlassesInvoke.Invoke(sendWearGlassesObject, new object[] 
+                    { 
+                        ENetReliability.Reliable, 
+                        connections, 
+                        itemGuid, 
+                        (byte)0, 
+                        offState, 
+                        false 
                     });
                 }
-                catch (Exception) { /* Ошибка Reflection */ }
+                catch (Exception) 
+                {
+                    // Если Reflection не сработал, пробуем стандартный метод
+                    clothing.ServerSetVisualToggleState((EVisualToggleType)1, false);
+                }
             }
 
-            // 3. Дублируем стандартными методами для надежности
-            clothing.ServerSetVisualToggleState((EVisualToggleType)1, false);
+            // 3. Дополнительная зачистка (звуки, эффекты, локальный свет)
             player.Player.updateGlassesLights(false);
 
 #pragma warning disable CS0618
