@@ -10,9 +10,8 @@ namespace HeadLamp
         [HarmonyPrefix]
         public static bool Prefix(PlayerClothing __instance)
         {
-            // Проверяем, включен ли сейчас режим фонаря/ПНВ
-            // Если он ВЫКЛЮЧЕН (false), значит игрок пытается его ВКЛЮЧИТЬ
-            if (!__instance.isVisualToggleActive(EVisualToggleType.Headlamp)) 
+            // Используем NON_COSMETIC для ПНВ и фонарей
+            if (!__instance.isVisualToggleActive(EVisualToggleType.NON_COSMETIC)) 
             {
                 bool isHat = __instance.hatAsset != null && HeadLamp.Instance.Configuration.Instance.Lamps.Any(x => x.ItemID == __instance.hatAsset.id);
                 bool isGlasses = __instance.glassesAsset != null && HeadLamp.Instance.Configuration.Instance.Lamps.Any(x => x.ItemID == __instance.glassesAsset.id);
