@@ -1,134 +1,123 @@
 using SDG.Unturned;
 using UnityEngine;
-using Rocket.Unturned.Player;
 using System.Linq;
 
 namespace HeadLamp
 {
     public class PlayerLampComponent : MonoBehaviour
     {
-        private UnturnedPlayer player;
+        // Используем нативный класс Player (он быстрее, так как не вызывает обертки RocketMod)
+        private Player player;
+        private PlayerClothing clothing;
+        
         private float lastTick;
         private float drainAccumulator = 0f;
-        private PlayerClothing clothing;
+        
+        // --- КЭШИРОВАНИЕ ---
+        // Эти переменные избавят сервер от лишних вычислений каждый кадр
+        private bool hasLampEquipped = false;
+        private float currentDrainRate = 0f;
 
         void Awake()
         {
-            player = UnturnedPlayer.FromPlayer(GetComponent<Player>());
-            clothing = player.Player.clothing;
+            player = GetComponent<Player>();
+            clothing = player.clothing;
         }
 
         void Start()
         {
+            // Подписываемся на смену очков, чтобы обновлять наш кэш
             clothing.onGlassesUpdated += OnGlassesUpdated;
+            
+            // Проверяем, что надето на игроке прямо сейчас (при входе на сервер)
+            UpdateCache(clothing.glassesAsset != null ? clothing.glassesAsset.id : (ushort)0);
         }
 
         void OnDestroy()
         {
             if (clothing != null)
-                clothing.onGlassesUpdated -= OnGlassesUpdated;
-        }
-
-        private void OnGlassesUpdated(ushort id, byte quality, byte[] state)
-        {
-            // Если игрок включил прибор при 0% прочности
-            if (state != null && state.Length > 0 && state[0] != 0 && quality == 0)
             {
-                // Имитируем жесткое выключение
-                ForceOff();
+                clothing.onGlassesUpdated -= OnGlassesUpdated;
             }
         }
 
-        void FixedUpdate()
+        // Событие срабатывает ТОЛЬКО когда игрок снимает/надевает очки
+        private void OnGlassesUpdated(ushort id, byte quality, byte[] state)
         {
+            UpdateCache(id);
+        }
+
+        // Обновляем информацию о скорости разряда
+        private void UpdateCache(ushort id)
+        {
+            drainAccumulator = 0f; // Сбрасываем таймер при смене предмета
+
+            if (id == 0)
+            {
+                hasLampEquipped = false;
+                currentDrainRate = 0f;
+                return;
+            }
+
+            // Ищем предмет в конфиге ОДИН раз при надевании, а не каждый тик
+            var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == id);
+            
+            if (config != null)
+            {
+                hasLampEquipped = true;
+                currentDrainRate = config.DrainPerSecond;
+            }
+            else
+            {
+                hasLampEquipped = false;
+                currentDrainRate = 0f;
+            }
+        }
+
+        void Update()
+        {
+            // Проверка каждые 0.5 секунд
             if (Time.time - lastTick < 0.5f) return;
             lastTick = Time.time;
 
-            CheckAndDrain();
-        }
-
-        private void CheckAndDrain()
-        {
-            if (clothing.glassesAsset == null || clothing.glassesState == null || clothing.glassesState.Length == 0)
+            // Если предмет не из конфига (или слот пуст) — выходим, экономя ресурсы
+            if (!hasLampEquipped || clothing.glassesAsset == null) 
                 return;
 
-            // Проверяем 0-й байт (состояние включения)
-            if (clothing.glassesState[0] != 0)
+            // Проверяем, включен ли прибор (байт 0 не равен 0)
+            bool isVisualOn = clothing.glassesState != null && clothing.glassesState.Length > 0 && clothing.glassesState[0] != 0;
+
+            if (isVisualOn)
             {
+                // Если заряд уже 0, нам ничего делать не нужно. 
+                // Harmony уже должен был всё выключить.
                 if (clothing.glassesQuality == 0)
-                {
-                    ForceOff();
                     return;
-                }
 
-                var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == clothing.glassesAsset.id);
-                float drainRate = config != null ? config.DrainPerSecond : 0.1f;
-
-                drainAccumulator += (drainRate * 0.5f);
+                // Накапливаем разряд. Умножаем на 0.5, так как тик проходит раз в полсекунды.
+                drainAccumulator += (currentDrainRate * 0.5f);
+                
                 if (drainAccumulator >= 1f)
                 {
                     byte drop = (byte)Mathf.FloorToInt(drainAccumulator);
-                    drainAccumulator -= drop;
+                    drainAccumulator -= drop; // Оставляем дробный остаток для точности
 
+                    // Отнимаем прочность
                     if (clothing.glassesQuality <= drop)
                     {
                         clothing.glassesQuality = 0;
-                        ForceOff();
                     }
                     else
                     {
                         clothing.glassesQuality -= drop;
-                        // Синхронизируем качество обычным способом
-                        clothing.sendUpdateGlassesQuality();
                     }
+
+                    // ОТПРАВЛЯЕМ СИНХРОНИЗАЦИЮ
+                    // Внимание: Если качество стало 0, именно ЭТОТ вызов активирует 
+                    // наш Harmony-патч Patch_sendUpdateGlassesQuality, который выключит свет!
+                    clothing.sendUpdateGlassesQuality();
                 }
             }
-        }
-
-        /// <summary>
-        /// Самый жесткий способ выключить прибор: 
-        /// Принудительная переотправка состояния предмета как при его надевании.
-        /// </summary>
-        private void ForceOff()
-        {
-            if (clothing.glassesAsset == null) return;
-
-            // 1. Подготавливаем "выключенный" стейт
-            byte[] newState = clothing.glassesState;
-            if (newState != null && newState.Length > 0)
-            {
-                newState[0] = 0; // Выключаем
-            }
-
-            // 2. Устанавливаем качество в 0
-            clothing.glassesQuality = 0;
-
-            // 3. Явное выключение через RPC (VISION и TACTICAL)
-            // Мы вызываем это ДО переотправки стейта
-            clothing.ServerSetVisualToggleState((EVisualToggleType)1, false);
-            clothing.ServerSetVisualToggleState((EVisualToggleType)0, false);
-
-            // 4. ГЛАВНЫЙ КОСТЫЛЬ: Переотправка всего предмета (tellWearGlasses)
-            // Это заставляет клиент пересоздать объект очков в Unity.
-            // Используем внутренний метод синхронизации.
-            clothing.sendUpdateGlassesQuality(); 
-            
-            // В Unturned 3.x метод обновления всего состояния очков выглядит так:
-            // Он заставляет всех игроков (включая владельца) обновить модель предмета.
-            player.Player.clothing.askUpdateGlasses(
-                clothing.glassesAsset.id, 
-                0, 
-                newState
-            );
-
-            // 5. Принудительное гашение света в движке игрока
-            player.Player.updateGlassesLights(false);
-
-#pragma warning disable CS0618
-            EffectManager.sendEffect(8, 24, player.Position);
-#pragma warning restore CS0618
-
-            drainAccumulator = 0f;
         }
     }
 }
