@@ -4,33 +4,37 @@ using System.Linq;
 
 namespace HeadLamp
 {
-    // 1. БЛОКИРОВКА ВКЛЮЧЕНИЯ (Кнопка 'N')
+    // 1. ПАТЧ НА ПЕРЕКЛЮЧЕНИЕ (Кнопка 'N')
     [HarmonyPatch(typeof(PlayerClothing), nameof(PlayerClothing.ServerSetVisualToggleState))]
     public class Patch_ServerSetVisualToggleState
     {
-        // ВАЖНО: имя параметра изменено с wantOn на isVisible, чтобы соответствовать игре
         public static bool Prefix(PlayerClothing __instance, EVisualToggleType type, ref bool isVisible)
         {
-            // Если игрок пытается ВКЛЮЧИТЬ (isVisible == true) ПНВ/Фонарь
-            // Используем (int)type == 2 (VISION) для универсальности
-            if (isVisible && (int)type == 2)
+            // Если пытаются включить что-либо на голове при 0% прочности
+            if (isVisible && __instance.glassesAsset != null && __instance.glassesQuality <= 0)
             {
-                if (__instance.glassesAsset != null && __instance.glassesQuality <= 0)
+                var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == __instance.glassesAsset.id);
+                if (config != null)
                 {
-                    var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == __instance.glassesAsset.id);
-                    if (config != null)
+                    // 1. Запрещаем визуальный стейт
+                    isVisible = false;
+
+                    // 2. ЖЕСТКО зануляем байт состояния (обычно это индекс 0)
+                    if (__instance.glassesState != null && __instance.glassesState.Length > 0)
                     {
-                        // Меняем намерение игрока на "выключить"
-                        isVisible = false; 
+                        __instance.glassesState[0] = 0;
                     }
+
+                    // 3. Синхронизируем стейт через "тяжелый" пакет
+                    __instance.sendUpdateGlassesState();
+                    return false; // Отменяем выполнение оригинального метода, мы всё сделали сами
                 }
             }
-            
-            return true; // Продолжаем выполнение метода с измененным параметром
+            return true;
         }
     }
 
-    // 2. АВТО-ВЫКЛЮЧЕНИЕ ПРИ РАЗРЯДКЕ В НОЛЬ
+    // 2. ПАТЧ НА ПОТЕРЮ ПРОЧНОСТИ (Когда заряд сел в 0)
     [HarmonyPatch(typeof(PlayerClothing), nameof(PlayerClothing.sendUpdateGlassesQuality))]
     public class Patch_sendUpdateGlassesQuality
     {
@@ -38,15 +42,31 @@ namespace HeadLamp
         {
             if (__instance.glassesAsset != null && __instance.glassesQuality <= 0)
             {
-                // Если байт стейта не 0 (свет горит)
+                // Проверяем, горит ли свет
                 if (__instance.glassesState != null && __instance.glassesState.Length > 0 && __instance.glassesState[0] != 0)
                 {
                     var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == __instance.glassesAsset.id);
                     if (config != null)
                     {
-                        // Вызываем выключение. 
-                        // Теперь, когда патч выше работает, этот вызов точно пройдет корректно.
+                        // ТУТ ИДЕТ СИЛОВАЯ ПЕРЕЗАПИСЬ
+                        __instance.glassesState[0] = 0;
+
+                        // Вызываем все возможные методы синхронизации:
+                        // а) Выключаем визуал (пробуем все индексы 0, 1, 2 на всякий случай)
+                        __instance.ServerSetVisualToggleState((EVisualToggleType)0, false);
+                        __instance.ServerSetVisualToggleState((EVisualToggleType)1, false);
                         __instance.ServerSetVisualToggleState((EVisualToggleType)2, false);
+
+                        // б) Отправляем обновленный стейт байтов
+                        __instance.sendUpdateGlassesState();
+
+                        // в) ФИНАЛЬНЫЙ УДАР: Полная переотправка предмета игроку через внутренний RPC
+                        // Это заставит Unity-модельку фонаря пересоздаться в выключенном состоянии
+                        __instance.player.clothing.askUpdateGlasses(
+                            __instance.glassesAsset.id, 
+                            0, 
+                            __instance.glassesState
+                        );
                     }
                 }
             }
