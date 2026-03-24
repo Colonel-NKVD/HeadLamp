@@ -4,30 +4,28 @@ using System.Linq;
 
 namespace HeadLamp
 {
-    // --- УРОВЕНЬ 1: Блокировка нажатия кнопки 'N' ---
+    // --- УРОВЕНЬ 1: Перехват нажатия 'N' и подавление предикции ---
     [HarmonyPatch(typeof(PlayerClothing), nameof(PlayerClothing.ServerSetVisualToggleState))]
     public class Patch_ServerSetVisualToggleState
     {
         public static bool Prefix(PlayerClothing __instance, EVisualToggleType type, ref bool isVisible)
         {
-            // В ваниле VISION (ПНВ/Фонари) — это индекс 1
-            if (isVisible && (int)type == 1) 
+            // Проверяем индексы 1 и 2 (на случай разных версий модов/ванилы для VISION)
+            if (isVisible && ((int)type == 1 || (int)type == 2)) 
             {
                 if (__instance.glassesAsset != null && __instance.glassesQuality <= 0)
                 {
                     var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == __instance.glassesAsset.id);
                     if (config != null)
                     {
-                        // Принудительно гасим попытку включения
+                        // МАГИЯ: Меняем желание клиента на "Выключить"
                         isVisible = false;
                         
-                        if (__instance.glassesState != null && __instance.glassesState.Length > 0)
-                            __instance.glassesState[0] = 0;
-
-                        // Вместо несуществующего sendUpdateGlassesState используем askUpdateGlasses
-                        __instance.askUpdateGlasses(__instance.glassesAsset.id, __instance.glassesQuality, __instance.glassesState);
-                        
-                        return false; // Отменяем оригинальный метод, так как мы всё обновили сами
+                        // ВАЖНО: Мы возвращаем TRUE! 
+                        // Оригинальный метод продолжит работу, увидит isVisible = false,
+                        // сам обновит байты и САМ разошлет всем клиентам пакет выключения.
+                        // Это собьет локально включенный свет у игрока.
+                        return true; 
                     }
                 }
             }
@@ -35,26 +33,26 @@ namespace HeadLamp
         }
     }
 
-    // --- УРОВЕНЬ 2: Блокировка физического света в Unity (Ультиматум) ---
+    // --- УРОВЕНЬ 2: Блокировка рендера Unity (Ультиматум) ---
+    // (Этот метод у тебя компилировался без ошибок, оставляем его как страховку)
     [HarmonyPatch(typeof(Player), nameof(Player.updateGlassesLights))]
     public class Patch_updateGlassesLights
     {
-        // Этот патч — самый важный. Он перерезает "провода" в самом движке.
         public static void Prefix(Player __instance, ref bool isVisible)
         {
-            if (isVisible && __instance.clothing.glassesAsset != null && __instance.clothing.glassesQuality <= 0)
+            if (isVisible && __instance.clothing != null && __instance.clothing.glassesAsset != null && __instance.clothing.glassesQuality <= 0)
             {
                 var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == __instance.clothing.glassesAsset.id);
                 if (config != null)
                 {
-                    // Даже если клиент уверен, что свет должен гореть — мы заставляем его выключиться
+                    // "Перерезаем провода": физически запрещаем движку зажигать свет
                     isVisible = false;
                 }
             }
         }
     }
 
-    // --- УРОВЕНЬ 3: Авто-выключение при разрядке в 0% ---
+    // --- УРОВЕНЬ 3: Авто-выключение при достижении 0% ---
     [HarmonyPatch(typeof(PlayerClothing), nameof(PlayerClothing.sendUpdateGlassesQuality))]
     public class Patch_sendUpdateGlassesQuality
     {
@@ -62,20 +60,16 @@ namespace HeadLamp
         {
             if (__instance.glassesAsset != null && __instance.glassesQuality <= 0)
             {
-                // Если заряд 0, а в байтах записано "включено"
+                // Проверяем байт (горит ли свет)
                 if (__instance.glassesState != null && __instance.glassesState.Length > 0 && __instance.glassesState[0] != 0)
                 {
                     var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == __instance.glassesAsset.id);
                     if (config != null)
                     {
-                        // Жестко зануляем байт включения
-                        __instance.glassesState[0] = 0;
-
-                        // Выключаем через стандартный метод (тип 1 — VISION)
+                        // Просто вызываем оригинальный публичный метод сервера.
+                        // Он сам поменяет стейты и всё синхронизирует. Без "левых" методов.
                         __instance.ServerSetVisualToggleState((EVisualToggleType)1, false);
-
-                        // И сразу принудительно синхронизируем всё состояние очков
-                        __instance.askUpdateGlasses(__instance.glassesAsset.id, __instance.glassesQuality, __instance.glassesState);
+                        __instance.ServerSetVisualToggleState((EVisualToggleType)2, false); // Бьем по обоим индексам для надежности
                     }
                 }
             }
