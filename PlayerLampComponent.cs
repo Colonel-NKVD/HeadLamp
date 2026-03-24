@@ -1,9 +1,7 @@
 using SDG.Unturned;
 using UnityEngine;
 using Rocket.Unturned.Player;
-using System;
 using System.Linq;
-using System.Reflection;
 
 namespace HeadLamp
 {
@@ -13,20 +11,9 @@ namespace HeadLamp
         private float lastTick;
         private float drainAccumulator = 0f;
 
-        // Кэшируем методы HumanClothes для производительности
-        private static FieldInfo glassesGuidField;
-        private static MethodInfo applyMethod;
-
         void Awake()
         {
             player = UnturnedPlayer.FromPlayer(GetComponent<Player>());
-
-            // Находим поле glassesGuid и метод apply в классе HumanClothes
-            if (applyMethod == null)
-            {
-                glassesGuidField = typeof(HumanClothes).GetField("glassesGuid", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                applyMethod = typeof(HumanClothes).GetMethod("apply", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-            }
         }
 
         void FixedUpdate()
@@ -42,14 +29,15 @@ namespace HeadLamp
             var clothing = player.Player.clothing;
             if (clothing.glassesAsset == null) return;
 
-            // Проверяем включен ли фонарь (байт 0 состояния)
+            // Проверяем включен ли свет
             bool isVisualOn = clothing.glassesState != null && clothing.glassesState.Length > 0 && clothing.glassesState[0] != 0;
 
             if (isVisualOn)
             {
+                // Если кто-то включил УЖЕ сломанный фонарь (например, багом) - тушим
                 if (clothing.glassesQuality == 0)
                 {
-                    ForceOff(clothing);
+                    ForceOffSequence(clothing, true);
                     return;
                 }
 
@@ -62,11 +50,15 @@ namespace HeadLamp
                     int drop = Mathf.FloorToInt(drainAccumulator);
                     drainAccumulator -= drop;
 
+                    // Если этот тик убьет батарейку до 0
                     if (clothing.glassesQuality <= drop)
                     {
+                        // ВАЖНО: Выполняем секвенцию выключения ДО того, как прочность станет 0
+                        ForceOffSequence(clothing, false);
+                        
+                        // И только ТЕПЕРЬ убиваем прочность
                         clothing.glassesQuality = 0;
                         clothing.sendUpdateGlassesQuality();
-                        ForceOff(clothing);
                     }
                     else
                     {
@@ -77,48 +69,37 @@ namespace HeadLamp
             }
         }
 
-        private void ForceOff(PlayerClothing clothing)
+        private void ForceOffSequence(PlayerClothing clothing, bool isAlreadyBroken)
         {
-            if (clothing.thirdClothes == null || clothing.glassesAsset == null) return;
-
-            try
+            // 1. Меняем состояние на сервере
+            if (clothing.glassesState != null && clothing.glassesState.Length > 0)
             {
-                // 1. Сохраняем текущий Guid
-                Guid currentGuid = clothing.glassesAsset.GUID;
-
-                // 2. Создаем выключенное состояние (стейт)
-                byte[] offState = new byte[clothing.glassesState.Length];
-                Array.Copy(clothing.glassesState, offState, clothing.glassesState.Length);
-                offState[0] = 0;
-
-                // 3. Обновляем данные в PlayerClothing (серверная часть)
-                clothing.glassesState = offState;
-
-                // 4. "СБРОС" через HumanClothes (визуальная часть)
-                // Имитируем снятие очков
-                glassesGuidField?.SetValue(clothing.thirdClothes, Guid.Empty);
-                applyMethod?.Invoke(clothing.thirdClothes, null);
-
-                // Имитируем надевание очков обратно с новым состоянием
-                glassesGuidField?.SetValue(clothing.thirdClothes, currentGuid);
-                // Важно: в некоторых версиях нужно также обновить glassesState в thirdClothes
-                var stateField = typeof(HumanClothes).GetField("glassesState", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Public);
-                stateField?.SetValue(clothing.thirdClothes, offState);
-
-                applyMethod?.Invoke(clothing.thirdClothes, null);
-
-                // 5. Принудительная отправка пакета визуального состояния
-                clothing.ServerSetVisualToggleState((EVisualToggleType)1, false);
-                player.Player.updateGlassesLights(false);
-                
-                // Синхронизируем изменения с клиентами (важно!)
-                clothing.sendUpdateGlassesQuality(); 
-            }
-            catch (Exception ex)
-            {
-                Rocket.Core.Logging.Logger.LogError("Ошибка принудительного выключения: " + ex.Message);
+                clothing.glassesState[0] = 0;
             }
 
+            // 2. Если предмет уже был сломан, нам придется временно "починить" его для клиента,
+            // чтобы он принял пакет выключения.
+            if (isAlreadyBroken)
+            {
+                clothing.glassesQuality = 1; 
+                clothing.sendUpdateGlassesQuality();
+            }
+
+            // 3. Отправляем легальный ванильный пакет выключения
+            // Клиент примет его, так как прочность предмета > 0
+            clothing.ServerSetVisualToggleState((EVisualToggleType)1, false);
+            
+            // 4. Гасим локальные источники
+            player.Player.updateGlassesLights(false);
+
+            // 5. Если мы временно чинили предмет - возвращаем 0
+            if (isAlreadyBroken)
+            {
+                clothing.glassesQuality = 0;
+                clothing.sendUpdateGlassesQuality();
+            }
+
+            // Звук выключения
 #pragma warning disable CS0618
             EffectManager.sendEffect(8, 24, player.Position);
 #pragma warning restore CS0618
