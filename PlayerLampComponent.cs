@@ -33,10 +33,8 @@ namespace HeadLamp
                 player.clothing.glassesState.CopyTo(state, 0);
                 if (state.Length > 0) state[0] = 0;
 
-                // ПЕРЕОДЕВАЕМ
                 player.clothing.askWearGlasses(id, 0, state, true);
 
-                // ЧИСТКА ИНВЕНТАРЯ
                 for (byte page = 0; page < PlayerInventory.PAGES; page++)
                 {
                     var items = player.inventory.items[page];
@@ -52,7 +50,6 @@ namespace HeadLamp
                     }
                 }
 
-                // ЧИСТКА ЗЕМЛИ (через экземпляр manager)
                 List<RegionCoordinate> regions = new List<RegionCoordinate>();
                 Regions.getRegionsInRadius(player.transform.position, 1f, regions);
                 foreach (var region in regions)
@@ -63,8 +60,8 @@ namespace HeadLamp
                         var drop = items[i];
                         if (drop.item.id == id && drop.item.quality == 0)
                         {
-                            // ВЫЗОВ ЧЕРЕЗ .manager (исправление ошибки CS0120)
-                            ItemManager.manager.askTakeItem(player.channel.owner.playerID.steamID, region.x, region.y, drop.instanceID, 0, 0, 0, 0);
+                            // ИСПРАВЛЕНИЕ: Используем .instance вместо .manager
+                            ItemManager.instance.askTakeItem(player.channel.owner.playerID.steamID, region.x, region.y, drop.instanceID, 0, 0, 0, 0);
                         }
                     }
                 }
