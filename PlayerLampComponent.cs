@@ -1,6 +1,7 @@
 using SDG.Unturned;
 using UnityEngine;
 using System.Linq;
+using System.Collections.Generic;
 
 namespace HeadLamp
 {
@@ -18,33 +19,59 @@ namespace HeadLamp
             lastTick = Time.time;
 
             if (player.clothing.glassesAsset == null) return;
-
             var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == player.clothing.glassesAsset.id);
             if (config == null) return;
 
             bool isLightOn = player.clothing.glassesState != null && player.clothing.glassesState.Length > 0 && player.clothing.glassesState[0] != 0;
 
-            if (isLightOn)
+            if (isLightOn && player.clothing.glassesQuality == 0)
             {
-                if (player.clothing.glassesQuality == 0)
+                EffectManager.sendEffect(61, 16, player.look.aim.position);
+
+                // Запоминаем конкретный экземпляр предмета
+                uint originalInstanceID = player.clothing.glassesInstanceID;
+                ushort id = player.clothing.glassesAsset.id;
+                byte[] state = player.clothing.glassesState;
+                if (state != null && state.Length > 0) state[0] = 0;
+
+                // Переодеваем
+                player.clothing.askWearGlasses(id, 0, state, true);
+
+                // Чистим инвентарь по InstanceID
+                for (byte page = 0; page < PlayerInventory.PAGES; page++)
                 {
-                    // Искры
-                    EffectManager.sendEffect(61, 16, player.transform.position + Vector3.up * 1.8f);
-
-                    // Сохраняем данные
-                    ushort id = player.clothing.glassesAsset.id;
-                    byte[] state = player.clothing.glassesState;
-                    if (state != null && state.Length > 0) state[0] = 0;
-
-                    // ФОКУС ПРОТИВ ДЮПА (Рефлексия для обнуления слота перед надеванием)
-                    var glassesField = typeof(PlayerClothing).GetField("_glasses", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-                    if (glassesField != null) glassesField.SetValue(player.clothing, (ushort)0);
-
-                    // Переодеваем "на пустую голову"
-                    player.clothing.askWearGlasses(id, 0, state, true);
-                    return;
+                    var items = player.inventory.items[page];
+                    if (items == null) continue;
+                    for (byte i = 0; i < items.getItemCount(); i++)
+                    {
+                        if (items.getItem(i)?.item.instanceID == originalInstanceID)
+                        {
+                            player.inventory.removeItem(page, i);
+                            break;
+                        }
+                    }
                 }
 
+                // Чистим землю по InstanceID
+                List<RegionCoordinate> regions = new List<RegionCoordinate>();
+                Regions.getRegionsInRadius(player.transform.position, 1f, regions);
+                foreach (var region in regions)
+                {
+                    var items = ItemManager.regions[region.x, region.y].items;
+                    for (int i = items.Count - 1; i >= 0; i--)
+                    {
+                        if (items[i].instanceID == originalInstanceID)
+                        {
+                            ItemManager.askTakeItem(region.x, region.y, items[i].instanceID);
+                        }
+                    }
+                }
+                return;
+            }
+
+            // Логика разряда...
+            if (isLightOn)
+            {
                 drainAccumulator += (config.DrainPerSecond * 0.5f);
                 if (drainAccumulator >= 1f)
                 {
