@@ -16,20 +16,19 @@ namespace HeadLamp
                 var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == __instance.glassesAsset.id);
                 if (config != null)
                 {
-                    // 1. Искры у головы
+                    // 1. Искры
                     EffectManager.sendEffect(61, 16, __instance.player.look.aim.position);
 
-                    // 2. ЗАПОМИНАЕМ уникальный ID предмета, который сейчас на голове
-                    uint originalInstanceID = __instance.glassesInstanceID;
-                    ushort itemID = __instance.glassesAsset.id;
-                    byte[] state = __instance.glassesState;
-                    if (state != null && state.Length > 0) state[0] = 0;
+                    // 2. Подготовка данных
+                    ushort id = __instance.glassesAsset.id;
+                    byte[] newState = new byte[__instance.glassesState.Length];
+                    __instance.glassesState.CopyTo(newState, 0);
+                    if (newState.Length > 0) newState[0] = 0;
 
-                    // 3. ПЕРЕОДЕВАЕМ (создает дюп с тем же InstanceID)
-                    __instance.askWearGlasses(itemID, 0, state, true);
+                    // 3. ПЕРЕОДЕВАЕМ
+                    __instance.askWearGlasses(id, 0, newState, true);
 
-                    // 4. УДАЛЯЕМ ТОЛЬКО ДУБЛИКАТ (с тем же InstanceID)
-                    // Чистим инвентарь
+                    // 4. ЧИСТКА ИНВЕНТАРЯ (по ID и качеству)
                     for (byte page = 0; page < PlayerInventory.PAGES; page++)
                     {
                         var items = __instance.player.inventory.items[page];
@@ -37,8 +36,7 @@ namespace HeadLamp
                         for (byte i = 0; i < items.getItemCount(); i++)
                         {
                             var jar = items.getItem(i);
-                            // Если нашли предмет с тем же уникальным ID в инвентаре - это наш дюп
-                            if (jar != null && jar.item.instanceID == originalInstanceID)
+                            if (jar != null && jar.item != null && jar.item.id == id && jar.item.quality == 0)
                             {
                                 __instance.player.inventory.removeItem(page, i);
                                 break; 
@@ -46,7 +44,7 @@ namespace HeadLamp
                         }
                     }
 
-                    // Чистим землю (если выпал)
+                    // 5. ЧИСТКА ЗЕМЛИ (с исправленным методом удаления)
                     List<RegionCoordinate> regions = new List<RegionCoordinate>();
                     Regions.getRegionsInRadius(__instance.player.transform.position, 1f, regions);
                     foreach (var region in regions)
@@ -54,13 +52,14 @@ namespace HeadLamp
                         var items = ItemManager.regions[region.x, region.y].items;
                         for (int i = items.Count - 1; i >= 0; i--)
                         {
-                            if (items[i].instanceID == originalInstanceID)
+                            var drop = items[i];
+                            if (drop.item.id == id && drop.item.quality == 0)
                             {
-                                ItemManager.askTakeItem(region.x, region.y, items[i].instanceID);
+                                // Используем безопасное удаление через серверный метод
+                                ItemManager.askTakeItem(__instance.player.channel.owner.playerID.steamID, region.x, region.y, drop.instanceID, 0, 0, 0, 0);
                             }
                         }
                     }
-
                     return false;
                 }
             }
