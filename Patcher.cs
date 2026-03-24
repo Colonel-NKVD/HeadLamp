@@ -1,7 +1,6 @@
 using HarmonyLib;
 using SDG.Unturned;
 using System.Linq;
-using System.Reflection;
 
 namespace HeadLamp
 {
@@ -10,37 +9,33 @@ namespace HeadLamp
     {
         public static bool Prefix(PlayerClothing __instance, EVisualToggleType type, ref bool isVisible)
         {
-            // Если пытаются включить (isVisible = true) севший фонарь
+            // Если игрок пытается включить свет на севшем фонаре
             if (isVisible && __instance.glassesAsset != null && __instance.glassesQuality <= 0)
             {
                 var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == __instance.glassesAsset.id);
                 if (config != null)
                 {
-                    // 1. Принудительно ставим выключенное состояние в байтах
+                    // 1. Принудительно гасим логическое состояние
                     if (__instance.glassesState != null && __instance.glassesState.Length > 0)
                     {
                         __instance.glassesState[0] = 0;
                     }
 
-                    // 2. Вызываем принудительную синхронизацию через "Ядерный метод"
-                    NuclearSync(__instance);
+                    // 2. ХИТРОСТЬ: "Перенадеваем" тот же фонарь.
+                    // Мы посылаем клиенту команду надеть фонарь с тем же ID, но с выключенными байтами.
+                    // Это мгновенно сбрасывает клиентский визуальный эффект света.
+                    __instance.askWearGlasses(
+                        __instance.glassesAsset.id, 
+                        0, // Качество 0
+                        __instance.glassesState, 
+                        true // Принудительно
+                    );
 
-                    return false; // ПОЛНАЯ ОСТАНОВКА. Оригинальный метод игры даже не узнает, что кнопку нажали.
+                    // 3. Останавливаем оригинальный метод, чтобы он не мешал нашей "перезагрузке"
+                    return false; 
                 }
             }
             return true;
-        }
-
-        // Вспомогательный метод для синхронизации, чтобы не было ошибок компиляции
-        public static void NuclearSync(PlayerClothing clothing)
-        {
-            // Пытаемся вызвать внутренний метод обновления через рефлексию
-            // Это заставляет сервер отправить пакет "Обновить одежду" всем игрокам
-            MethodInfo sendUpdate = typeof(PlayerClothing).GetMethod("sendUpdateGlassesQuality", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            if (sendUpdate != null) sendUpdate.Invoke(clothing, null);
-
-            // Дополнительно спамим визуальным выключением (на всякий случай)
-            clothing.player.updateGlassesLights(false);
         }
     }
 }
