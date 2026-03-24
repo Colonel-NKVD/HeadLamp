@@ -4,25 +4,55 @@ using System.Linq;
 
 namespace HeadLamp
 {
-    public class Patch_onGlassesUpdated
+    // 1. БЛОКИРОВКА ВКЛЮЧЕНИЯ (Кнопка 'N')
+    [HarmonyPatch(typeof(PlayerClothing), nameof(PlayerClothing.ServerSetVisualToggleState))]
+    public class Patch_ServerSetVisualToggleState
     {
-        // Убираем [HarmonyPatch] - мы его вызвали вручную в HeadLamp.cs
-        public static bool Prefix(PlayerClothing __instance, ushort id, byte quality, byte[] state)
+        // Используем ref bool wantOn, чтобы иметь возможность изменить решение сервера "на лету"
+        public static bool Prefix(PlayerClothing __instance, EVisualToggleType type, ref bool wantOn)
         {
-            // Если прочность 0 и это предмет из конфига
-            if (id != 0 && quality <= 0)
+            // Если игрок пытается ВКЛЮЧИТЬ (wantOn == true) ПНВ/Фонарь (VISION)
+            if (wantOn && type == EVisualToggleType.VISION)
             {
-                var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == id);
-                if (config != null)
+                if (__instance.glassesAsset != null && __instance.glassesQuality <= 0)
                 {
-                    // Если пытаются включить (state[0] != 0), принудительно гасим в 0
-                    if (state != null && state.Length > 0 && state[0] != 0)
+                    var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == __instance.glassesAsset.id);
+                    if (config != null)
                     {
-                        state[0] = 0;
+                        // МАГИЯ ЗДЕСЬ: Мы не отменяем метод (не делаем return false).
+                        // Мы меняем желание клиента с "Включить" на "Выключить".
+                        // Сервер обработает это и разошлет всем клиентам пакет: "Фонарь ВЫКЛЮЧЕН".
+                        // Это жестко подавляет любой клиентский рассинхрон.
+                        wantOn = false; 
                     }
                 }
             }
-            return true; // Разрешаем выполнение оригинального метода с нашими правками в state
+            
+            return true; // Продолжаем выполнение оригинального метода
+        }
+    }
+
+    // 2. АВТО-ВЫКЛЮЧЕНИЕ ПРИ РАЗРЯДКЕ В НОЛЬ
+    // Срабатывает каждый раз, когда меняется качество предмета
+    [HarmonyPatch(typeof(PlayerClothing), nameof(PlayerClothing.sendUpdateGlassesQuality))]
+    public class Patch_sendUpdateGlassesQuality
+    {
+        public static void Postfix(PlayerClothing __instance)
+        {
+            if (__instance.glassesAsset != null && __instance.glassesQuality <= 0)
+            {
+                // Проверяем, горит ли сейчас свет (байт 0 не равен 0)
+                if (__instance.glassesState != null && __instance.glassesState.Length > 0 && __instance.glassesState[0] != 0)
+                {
+                    var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == __instance.glassesAsset.id);
+                    if (config != null)
+                    {
+                        // Как только заряд упал в 0, а свет горит - вызываем официальный серверный метод выключения.
+                        // Он сам поменяет стейт и сам всё разошлет.
+                        __instance.ServerSetVisualToggleState(EVisualToggleType.VISION, false);
+                    }
+                }
+            }
         }
     }
 }
