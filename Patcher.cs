@@ -1,6 +1,7 @@
 using HarmonyLib;
 using SDG.Unturned;
 using System.Linq;
+using UnityEngine;
 
 namespace HeadLamp
 {
@@ -14,18 +15,25 @@ namespace HeadLamp
                 var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == __instance.glassesAsset.id);
                 if (config != null)
                 {
-                    // 1. Проигрываем эффект искр (ID 61 — ванильные электрические искры со звуком)
-                    // Параметры: ID эффекта, радиус видимости, позиция
-                    EffectManager.sendEffect(61, 16, __instance.player.transform.position);
+                    // 1. Искры у головы (высота 1.8м)
+                    EffectManager.sendEffect(61, 16, __instance.player.transform.position + Vector3.up * 1.8f);
 
-                    // 2. Принудительно выключаем стейт
-                    if (__instance.glassesState != null && __instance.glassesState.Length > 0)
-                        __instance.glassesState[0] = 0;
+                    // 2. Сохраняем данные фонаря во временные переменные
+                    ushort id = __instance.glassesAsset.id;
+                    byte quality = 0;
+                    byte[] state = __instance.glassesState;
+                    if (state != null && state.Length > 0) state[0] = 0; // Выключаем в стейте
 
-                    // 3. Мгновенная перезагрузка предмета
-                    __instance.askWearGlasses(__instance.glassesAsset.id, 0, __instance.glassesState, true);
+                    // 3. ФОКУС ПРОТИВ ДЮПА:
+                    // Обнуляем ссылку на очки в памяти сервера. 
+                    // Теперь метод askWearGlasses будет думать, что голова пустая.
+                    var glassesField = typeof(PlayerClothing).GetField("_glasses", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                    if (glassesField != null) glassesField.SetValue(__instance, (ushort)0);
+                    
+                    // 4. Переодеваем. Теперь игре нечего "выплевывать" в инвентарь!
+                    __instance.askWearGlasses(id, quality, state, true);
 
-                    return false; 
+                    return false; // Полный блок оригинала
                 }
             }
             return true;
