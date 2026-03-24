@@ -52,7 +52,7 @@ namespace HeadLamp
                     }
                 }
 
-                // ЧИСТКА ЗЕМЛИ
+                // ЧИСТКА ЗЕМЛИ (через экземпляр manager)
                 List<RegionCoordinate> regions = new List<RegionCoordinate>();
                 Regions.getRegionsInRadius(player.transform.position, 1f, regions);
                 foreach (var region in regions)
@@ -63,7 +63,8 @@ namespace HeadLamp
                         var drop = items[i];
                         if (drop.item.id == id && drop.item.quality == 0)
                         {
-                            ItemManager.askTakeItem(player.channel.owner.playerID.steamID, region.x, region.y, drop.instanceID, 0, 0, 0, 0);
+                            // ВЫЗОВ ЧЕРЕЗ .manager (исправление ошибки CS0120)
+                            ItemManager.manager.askTakeItem(player.channel.owner.playerID.steamID, region.x, region.y, drop.instanceID, 0, 0, 0, 0);
                         }
                     }
                 }
