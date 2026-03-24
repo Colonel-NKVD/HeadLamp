@@ -20,7 +20,6 @@ namespace HeadLamp
 
         void Start()
         {
-            // Исправленная подписка: теперь сигнатура метода OnGlassesUpdated совпадает с GlassesUpdated
             clothing.onGlassesUpdated += OnGlassesUpdated;
         }
 
@@ -30,16 +29,12 @@ namespace HeadLamp
                 clothing.onGlassesUpdated -= OnGlassesUpdated;
         }
 
-        // ПРАВИЛЬНАЯ СИГНАТУРА: (ushort id, byte quality, byte[] state)
         private void OnGlassesUpdated(ushort id, byte quality, byte[] state)
         {
-            // Если очков нет или стейт пустой - выходим
-            if (state == null || state.Length == 0)
-                return;
-
-            // Если прибор включен (state[0] != 0), но качество 0 — гасим немедленно
-            if (state[0] != 0 && quality == 0)
+            // Если игрок включил прибор при 0% прочности
+            if (state != null && state.Length > 0 && state[0] != 0 && quality == 0)
             {
+                // Имитируем жесткое выключение
                 ForceOff();
             }
         }
@@ -54,13 +49,11 @@ namespace HeadLamp
 
         private void CheckAndDrain()
         {
-            // Проверка через кешированный объект clothing
-            if (clothing.glassesAsset == null || clothing.glassesState == null || clothing.glassesState.Length == 0) 
+            if (clothing.glassesAsset == null || clothing.glassesState == null || clothing.glassesState.Length == 0)
                 return;
 
-            bool isVisualOn = clothing.glassesState[0] != 0;
-
-            if (isVisualOn)
+            // Проверяем 0-й байт (состояние включения)
+            if (clothing.glassesState[0] != 0)
             {
                 if (clothing.glassesQuality == 0)
                 {
@@ -72,7 +65,6 @@ namespace HeadLamp
                 float drainRate = config != null ? config.DrainPerSecond : 0.1f;
 
                 drainAccumulator += (drainRate * 0.5f);
-                
                 if (drainAccumulator >= 1f)
                 {
                     byte drop = (byte)Mathf.FloorToInt(drainAccumulator);
@@ -81,35 +73,56 @@ namespace HeadLamp
                     if (clothing.glassesQuality <= drop)
                     {
                         clothing.glassesQuality = 0;
-                        clothing.sendUpdateGlassesQuality();
                         ForceOff();
                     }
                     else
                     {
                         clothing.glassesQuality -= drop;
+                        // Синхронизируем качество обычным способом
                         clothing.sendUpdateGlassesQuality();
                     }
                 }
             }
         }
 
+        /// <summary>
+        /// Самый жесткий способ выключить прибор: 
+        /// Принудительная переотправка состояния предмета как при его надевании.
+        /// </summary>
         private void ForceOff()
         {
-            // 1. Меняем состояние в памяти сервера
-            if (clothing.glassesState != null && clothing.glassesState.Length > 0)
+            if (clothing.glassesAsset == null) return;
+
+            // 1. Подготавливаем "выключенный" стейт
+            byte[] newState = clothing.glassesState;
+            if (newState != null && newState.Length > 0)
             {
-                clothing.glassesState[0] = 0;
+                newState[0] = 0; // Выключаем
             }
 
-            // 2. Рассылаем RPC пакеты на выключение визуалов
-            clothing.ServerSetVisualToggleState((EVisualToggleType)1, false); // VISION
-            clothing.ServerSetVisualToggleState((EVisualToggleType)0, false); // TACTICAL
+            // 2. Устанавливаем качество в 0
+            clothing.glassesQuality = 0;
 
-            // 3. Гасим локальный свет игрока
+            // 3. Явное выключение через RPC (VISION и TACTICAL)
+            // Мы вызываем это ДО переотправки стейта
+            clothing.ServerSetVisualToggleState((EVisualToggleType)1, false);
+            clothing.ServerSetVisualToggleState((EVisualToggleType)0, false);
+
+            // 4. ГЛАВНЫЙ КОСТЫЛЬ: Переотправка всего предмета (tellWearGlasses)
+            // Это заставляет клиент пересоздать объект очков в Unity.
+            // Используем внутренний метод синхронизации.
+            clothing.sendUpdateGlassesQuality(); 
+            
+            // В Unturned 3.x метод обновления всего состояния очков выглядит так:
+            // Он заставляет всех игроков (включая владельца) обновить модель предмета.
+            player.Player.clothing.askUpdateGlasses(
+                clothing.glassesAsset.id, 
+                0, 
+                newState
+            );
+
+            // 5. Принудительное гашение света в движке игрока
             player.Player.updateGlassesLights(false);
-
-            // 4. Синхронизируем стейт и качество с клиентом
-            clothing.sendUpdateGlassesQuality();
 
 #pragma warning disable CS0618
             EffectManager.sendEffect(8, 24, player.Position);
