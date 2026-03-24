@@ -2,6 +2,7 @@ using HarmonyLib;
 using SDG.Unturned;
 using System.Linq;
 using UnityEngine;
+using System.Collections.Generic;
 
 namespace HeadLamp
 {
@@ -15,25 +16,52 @@ namespace HeadLamp
                 var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == __instance.glassesAsset.id);
                 if (config != null)
                 {
-                    // 1. Искры у головы (высота 1.8м)
-                    EffectManager.sendEffect(61, 16, __instance.player.transform.position + Vector3.up * 1.8f);
+                    // 1. Искры у головы
+                    EffectManager.sendEffect(61, 16, __instance.player.look.aim.position);
 
-                    // 2. Сохраняем данные фонаря во временные переменные
-                    ushort id = __instance.glassesAsset.id;
-                    byte quality = 0;
+                    // 2. ЗАПОМИНАЕМ уникальный ID предмета, который сейчас на голове
+                    uint originalInstanceID = __instance.glassesInstanceID;
+                    ushort itemID = __instance.glassesAsset.id;
                     byte[] state = __instance.glassesState;
-                    if (state != null && state.Length > 0) state[0] = 0; // Выключаем в стейте
+                    if (state != null && state.Length > 0) state[0] = 0;
 
-                    // 3. ФОКУС ПРОТИВ ДЮПА:
-                    // Обнуляем ссылку на очки в памяти сервера. 
-                    // Теперь метод askWearGlasses будет думать, что голова пустая.
-                    var glassesField = typeof(PlayerClothing).GetField("_glasses", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-                    if (glassesField != null) glassesField.SetValue(__instance, (ushort)0);
-                    
-                    // 4. Переодеваем. Теперь игре нечего "выплевывать" в инвентарь!
-                    __instance.askWearGlasses(id, quality, state, true);
+                    // 3. ПЕРЕОДЕВАЕМ (создает дюп с тем же InstanceID)
+                    __instance.askWearGlasses(itemID, 0, state, true);
 
-                    return false; // Полный блок оригинала
+                    // 4. УДАЛЯЕМ ТОЛЬКО ДУБЛИКАТ (с тем же InstanceID)
+                    // Чистим инвентарь
+                    for (byte page = 0; page < PlayerInventory.PAGES; page++)
+                    {
+                        var items = __instance.player.inventory.items[page];
+                        if (items == null) continue;
+                        for (byte i = 0; i < items.getItemCount(); i++)
+                        {
+                            var jar = items.getItem(i);
+                            // Если нашли предмет с тем же уникальным ID в инвентаре - это наш дюп
+                            if (jar != null && jar.item.instanceID == originalInstanceID)
+                            {
+                                __instance.player.inventory.removeItem(page, i);
+                                break; 
+                            }
+                        }
+                    }
+
+                    // Чистим землю (если выпал)
+                    List<RegionCoordinate> regions = new List<RegionCoordinate>();
+                    Regions.getRegionsInRadius(__instance.player.transform.position, 1f, regions);
+                    foreach (var region in regions)
+                    {
+                        var items = ItemManager.regions[region.x, region.y].items;
+                        for (int i = items.Count - 1; i >= 0; i--)
+                        {
+                            if (items[i].instanceID == originalInstanceID)
+                            {
+                                ItemManager.askTakeItem(region.x, region.y, items[i].instanceID);
+                            }
+                        }
+                    }
+
+                    return false;
                 }
             }
             return true;
