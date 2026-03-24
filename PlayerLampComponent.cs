@@ -10,15 +10,43 @@ namespace HeadLamp
         private UnturnedPlayer player;
         private float lastTick;
         private float drainAccumulator = 0f;
+        private PlayerClothing clothing;
 
         void Awake()
         {
             player = UnturnedPlayer.FromPlayer(GetComponent<Player>());
+            clothing = player.Player.clothing;
+        }
+
+        void Start()
+        {
+            // ПОДПИСКА: Ловим момент, когда игрок нажимает 'N' или меняет очки
+            clothing.onGlassesUpdated += OnGlassesUpdated;
+        }
+
+        void OnDestroy()
+        {
+            // ОТПИСКА: Обязательно убираем за собой при выходе игрока
+            if (clothing != null)
+                clothing.onGlassesUpdated -= OnGlassesUpdated;
+        }
+
+        // Этот метод вызывается игрой каждый раз, когда меняется состояние очков
+        private void OnGlassesUpdated(PlayerClothing clothing)
+        {
+            if (clothing.glassesAsset == null || clothing.glassesState == null || clothing.glassesState.Length == 0)
+                return;
+
+            // Если прибор включен (байт 0 != 0), но заряд 0% — не даем включить
+            if (clothing.glassesState[0] != 0 && clothing.glassesQuality == 0)
+            {
+                // Мгновенно тушим «в зачатке»
+                ForceOff();
+            }
         }
 
         void FixedUpdate()
         {
-            // Проверка каждые 0.5 сек для экономии ресурсов
             if (Time.time - lastTick < 0.5f) return;
             lastTick = Time.time;
 
@@ -27,29 +55,24 @@ namespace HeadLamp
 
         private void CheckAndDrain()
         {
-            var clothing = player.Player.clothing;
-
-            // Работаем ТОЛЬКО с очками
             if (clothing.glassesAsset == null || clothing.glassesState == null || clothing.glassesState.Length == 0) 
                 return;
 
-            // Проверяем включен ли визуальный эффект (байт 0)
+            // Проверяем, горит ли свет сейчас
             bool isVisualOn = clothing.glassesState[0] != 0;
 
             if (isVisualOn)
             {
-                // Если заряд уже 0, но свет горит — тушим немедленно
+                // Если заряд уже 0, а свет горит (например, после входа на сервер)
                 if (clothing.glassesQuality == 0)
                 {
-                    ForceOff(clothing);
+                    ForceOff();
                     return;
                 }
 
-                // Ищем конфиг для предмета
                 var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == clothing.glassesAsset.id);
                 float drainRate = config != null ? config.DrainPerSecond : 0.1f;
 
-                // Накапливаем износ (0.5 сек интервал)
                 drainAccumulator += (drainRate * 0.5f);
                 
                 if (drainAccumulator >= 1f)
@@ -60,10 +83,8 @@ namespace HeadLamp
                     if (clothing.glassesQuality <= drop)
                     {
                         clothing.glassesQuality = 0;
-                        // Сначала синхронизируем 0% качества
                         clothing.sendUpdateGlassesQuality();
-                        // Затем принудительно гасим свет
-                        ForceOff(clothing);
+                        ForceOff(); // Выключаем, так как заряд упал в 0
                     }
                     else
                     {
@@ -74,27 +95,28 @@ namespace HeadLamp
             }
         }
 
-        private void ForceOff(PlayerClothing clothing)
+        private void ForceOff()
         {
-            // 1. Принудительно правим стейт на сервере (байт 0 отвечает за ON/OFF)
+            // 1. Устанавливаем байт состояния в 0 (выключено)
             if (clothing.glassesState != null && clothing.glassesState.Length > 0)
             {
                 clothing.glassesState[0] = 0;
             }
 
-            // 2. Отправляем пакет переключения всем игрокам (включая владельца)
-            // EVisualToggleType.VISION = 1 (ПНВ и налобные фонари)
+            // 2. Отправляем пакет на выключение всех типов визуальных эффектов
+            // Индекс 1 (VISION) - основной для ПНВ и Фонарей
             clothing.ServerSetVisualToggleState((EVisualToggleType)1, false);
+            // Индекс 0 (TACTICAL) - на случай, если мод использует этот канал
+            clothing.ServerSetVisualToggleState((EVisualToggleType)0, false);
 
-            // 3. Обновляем локальные источники света для игрока
+            // 3. Принудительно гасим Unity-источники света на голове
             player.Player.updateGlassesLights(false);
 
-            // 4. Важный момент: переотправляем качество, так как этот пакет 
-            // часто "проталкивает" обновление стейта в некоторых версиях игры
+            // 4. Синхронизируем качество (это заставляет клиент перепроверить стейт предмета)
             clothing.sendUpdateGlassesQuality();
 
+            // Эффект щелчка (звук)
 #pragma warning disable CS0618
-            // Звуковой эффект выключения (клик)
             EffectManager.sendEffect(8, 24, player.Position);
 #pragma warning restore CS0618
 
