@@ -8,23 +8,25 @@ namespace HeadLamp
     [HarmonyPatch(typeof(PlayerClothing), nameof(PlayerClothing.ServerSetVisualToggleState))]
     public class Patch_ServerSetVisualToggleState
     {
-        public static bool Prefix(PlayerClothing __instance, EVisualToggleType type, ref bool wantOn)
+        // ВАЖНО: имя параметра изменено с wantOn на isVisible, чтобы соответствовать игре
+        public static bool Prefix(PlayerClothing __instance, EVisualToggleType type, ref bool isVisible)
         {
-            // Используем (int)type == 2, чтобы избежать ошибки CS0117
-            // 2 — это индекс для VISION (ПНВ и налобники)
-            if (wantOn && (int)type == 2)
+            // Если игрок пытается ВКЛЮЧИТЬ (isVisible == true) ПНВ/Фонарь
+            // Используем (int)type == 2 (VISION) для универсальности
+            if (isVisible && (int)type == 2)
             {
                 if (__instance.glassesAsset != null && __instance.glassesQuality <= 0)
                 {
                     var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == __instance.glassesAsset.id);
                     if (config != null)
                     {
-                        wantOn = false; 
+                        // Меняем намерение игрока на "выключить"
+                        isVisible = false; 
                     }
                 }
             }
             
-            return true;
+            return true; // Продолжаем выполнение метода с измененным параметром
         }
     }
 
@@ -36,13 +38,14 @@ namespace HeadLamp
         {
             if (__instance.glassesAsset != null && __instance.glassesQuality <= 0)
             {
-                // Проверяем состояние байта (включен ли свет)
+                // Если байт стейта не 0 (свет горит)
                 if (__instance.glassesState != null && __instance.glassesState.Length > 0 && __instance.glassesState[0] != 0)
                 {
                     var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == __instance.glassesAsset.id);
                     if (config != null)
                     {
-                        // Принудительно вызываем выключение через индекс 2
+                        // Вызываем выключение. 
+                        // Теперь, когда патч выше работает, этот вызов точно пройдет корректно.
                         __instance.ServerSetVisualToggleState((EVisualToggleType)2, false);
                     }
                 }
