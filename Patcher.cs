@@ -16,19 +16,17 @@ namespace HeadLamp
                 var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == __instance.glassesAsset.id);
                 if (config != null)
                 {
-                    // 1. Искры у головы
                     EffectManager.sendEffect(61, 16, __instance.player.look.aim.position);
 
-                    // 2. Данные
                     ushort id = __instance.glassesAsset.id;
                     byte[] newState = new byte[__instance.glassesState.Length];
                     __instance.glassesState.CopyTo(newState, 0);
                     if (newState.Length > 0) newState[0] = 0;
 
-                    // 3. ПЕРЕОДЕВАЕМ (твой рабочий метод)
+                    // ПЕРЕОДЕВАЕМ
                     __instance.askWearGlasses(id, 0, newState, true);
 
-                    // 4. ЧИСТКА ИНВЕНТАРЯ
+                    // ЧИСТКА ИНВЕНТАРЯ
                     for (byte page = 0; page < PlayerInventory.PAGES; page++)
                     {
                         var items = __instance.player.inventory.items[page];
@@ -44,7 +42,7 @@ namespace HeadLamp
                         }
                     }
 
-                    // 5. ЧИСТКА ЗЕМЛИ (через экземпляр manager)
+                    // ЧИСТКА ЗЕМЛИ (через .instance)
                     List<RegionCoordinate> regions = new List<RegionCoordinate>();
                     Regions.getRegionsInRadius(__instance.player.transform.position, 1f, regions);
                     foreach (var region in regions)
@@ -55,8 +53,8 @@ namespace HeadLamp
                             var drop = items[i];
                             if (drop.item.id == id && drop.item.quality == 0)
                             {
-                                // ВЫЗОВ ЧЕРЕЗ .manager (исправление ошибки CS0120)
-                                ItemManager.manager.askTakeItem(__instance.player.channel.owner.playerID.steamID, region.x, region.y, drop.instanceID, 0, 0, 0, 0);
+                                // ИСПРАВЛЕНИЕ: Используем .instance вместо .manager
+                                ItemManager.instance.askTakeItem(__instance.player.channel.owner.playerID.steamID, region.x, region.y, drop.instanceID, 0, 0, 0, 0);
                             }
                         }
                     }
