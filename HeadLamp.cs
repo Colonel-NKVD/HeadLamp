@@ -1,36 +1,58 @@
 using Rocket.Core.Plugins;
 using Rocket.Unturned;
-using Rocket.Unturned.Events;
 using Rocket.Unturned.Player;
+using HarmonyLib;
+using System.Reflection;
+using Rocket.Core.Logging;
 
 namespace HeadLamp
 {
     public class HeadLamp : RocketPlugin<HeadLampConfiguration>
     {
-        // Синглтон для доступа к конфигурации из нашего компонента
         public static HeadLamp Instance;
+        private Harmony harmony;
+        private const string HarmonyId = "com.headlamp.patcher";
 
         protected override void Load()
         {
             Instance = this;
 
-            // Подписываемся на событие входа игрока
+            // 1. Инициализируем Harmony и применяем все патчи из Patcher.cs
+            try 
+            {
+                harmony = new Harmony(HarmonyId);
+                harmony.PatchAll(Assembly.GetExecutingAssembly());
+                Logger.Log("HeadLamp: Harmony patches applied successfully.");
+            }
+            catch (System.Exception ex)
+            {
+                Logger.LogException(ex, "HeadLamp: Failed to apply Harmony patches!");
+            }
+
+            // 2. Подписываемся на события
             U.Events.OnPlayerConnected += OnPlayerConnected;
 
-            Rocket.Core.Logging.Logger.Log("HeadLamp Plugin loaded successfully! (Clean API Version)");
+            Logger.Log("HeadLamp Plugin loaded! (Battery + Harmony Protection)");
         }
 
         protected override void Unload()
         {
-            // Отписываемся от событий при выгрузке, чтобы не было утечек памяти
+            // 3. Отписываемся от событий
             U.Events.OnPlayerConnected -= OnPlayerConnected;
 
-            Rocket.Core.Logging.Logger.Log("HeadLamp Plugin unloaded!");
+            // 4. Снимаем патчи при выгрузке (важно для горячей перезагрузки плагинов)
+            if (harmony != null)
+            {
+                harmony.UnpatchAll(HarmonyId);
+                harmony = null;
+            }
+
+            Logger.Log("HeadLamp Plugin unloaded!");
         }
 
         private void OnPlayerConnected(UnturnedPlayer player)
         {
-            // Вешаем наш скрипт логики батарейки на игрока, если его там еще нет
+            // Вешаем компонент логики на игрока
             if (player.Player.gameObject.GetComponent<PlayerLampComponent>() == null)
             {
                 player.Player.gameObject.AddComponent<PlayerLampComponent>();
