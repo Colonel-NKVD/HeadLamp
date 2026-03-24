@@ -28,23 +28,23 @@ namespace HeadLamp
             {
                 EffectManager.sendEffect(61, 16, player.look.aim.position);
 
-                // Запоминаем конкретный экземпляр предмета
-                uint originalInstanceID = player.clothing.glassesInstanceID;
                 ushort id = player.clothing.glassesAsset.id;
-                byte[] state = player.clothing.glassesState;
-                if (state != null && state.Length > 0) state[0] = 0;
+                byte[] state = new byte[player.clothing.glassesState.Length];
+                player.clothing.glassesState.CopyTo(state, 0);
+                if (state.Length > 0) state[0] = 0;
 
-                // Переодеваем
+                // ПЕРЕОДЕВАЕМ
                 player.clothing.askWearGlasses(id, 0, state, true);
 
-                // Чистим инвентарь по InstanceID
+                // ЧИСТКА ИНВЕНТАРЯ
                 for (byte page = 0; page < PlayerInventory.PAGES; page++)
                 {
                     var items = player.inventory.items[page];
                     if (items == null) continue;
                     for (byte i = 0; i < items.getItemCount(); i++)
                     {
-                        if (items.getItem(i)?.item.instanceID == originalInstanceID)
+                        var jar = items.getItem(i);
+                        if (jar != null && jar.item != null && jar.item.id == id && jar.item.quality == 0)
                         {
                             player.inventory.removeItem(page, i);
                             break;
@@ -52,7 +52,7 @@ namespace HeadLamp
                     }
                 }
 
-                // Чистим землю по InstanceID
+                // ЧИСТКА ЗЕМЛИ
                 List<RegionCoordinate> regions = new List<RegionCoordinate>();
                 Regions.getRegionsInRadius(player.transform.position, 1f, regions);
                 foreach (var region in regions)
@@ -60,16 +60,16 @@ namespace HeadLamp
                     var items = ItemManager.regions[region.x, region.y].items;
                     for (int i = items.Count - 1; i >= 0; i--)
                     {
-                        if (items[i].instanceID == originalInstanceID)
+                        var drop = items[i];
+                        if (drop.item.id == id && drop.item.quality == 0)
                         {
-                            ItemManager.askTakeItem(region.x, region.y, items[i].instanceID);
+                            ItemManager.askTakeItem(player.channel.owner.playerID.steamID, region.x, region.y, drop.instanceID, 0, 0, 0, 0);
                         }
                     }
                 }
                 return;
             }
 
-            // Логика разряда...
             if (isLightOn)
             {
                 drainAccumulator += (config.DrainPerSecond * 0.5f);
