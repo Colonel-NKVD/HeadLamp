@@ -25,31 +25,26 @@ namespace HeadLamp
             var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == player.clothing.glassesAsset.id);
             if (config == null) return;
 
-            // Горит ли свет (байт состояния)
+            // Проверяем, горит ли свет (байт состояния)
             bool isLightOn = player.clothing.glassesState != null && player.clothing.glassesState.Length > 0 && player.clothing.glassesState[0] != 0;
 
             if (isLightOn)
             {
-                // Если прочность упала в 0, но свет все еще горит
                 if (player.clothing.glassesQuality == 0)
                 {
-                    // КОСТЫЛЬ 2: Агрессивное подавление.
-                    // Меняем байт принудительно
-                    player.clothing.glassesState[0] = 0;
-
-                    // Спамим серверным методом выключения по ВСЕМ возможным индексам Unturned
-                    // Клиент просто физически не сможет удержать свет включенным
-                    player.clothing.ServerSetVisualToggleState((EVisualToggleType)0, false);
-                    player.clothing.ServerSetVisualToggleState((EVisualToggleType)1, false);
-                    player.clothing.ServerSetVisualToggleState((EVisualToggleType)2, false);
-                    player.clothing.ServerSetVisualToggleState((EVisualToggleType)3, false);
-
-                    // Синхронизируем иконку
-                    player.clothing.sendUpdateGlassesQuality();
-                    return; // Больше ничего не делаем
+                    // --- ЯДЕРНЫЙ ВАРИАНТ ---
+                    // Если свет всё еще горит при 0%, значит обычные пакеты не помогли.
+                    // МЫ ПРИНУДИТЕЛЬНО СНИМАЕМ ФОНАРЬ С ИГРОКА.
+                    // Метод askWearGlasses(0, ...) — это команда "надеть НИЧЕГО", то есть снять текущее.
+                    
+                    player.clothing.askWearGlasses(0, 0, new byte[0], true);
+                    
+                    // Сообщаем в чат, чтобы игрок не пугался (опционально)
+                    ChatManager.say(player.channel.owner.playerID.steamID, "Ваш фонарь разрядился и перестал работать!", Color.red);
+                    return;
                 }
 
-                // --- Логика разряда (работает только если качество > 0) ---
+                // Логика разряда
                 drainAccumulator += (config.DrainPerSecond * 0.5f);
                 if (drainAccumulator >= 1f)
                 {
