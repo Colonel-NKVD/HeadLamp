@@ -4,37 +4,56 @@ using System.Linq;
 
 namespace HeadLamp
 {
-    // 1. ПАТЧ НА ПЕРЕКЛЮЧЕНИЕ (Кнопка 'N')
+    // --- УРОВЕНЬ 1: Блокировка сетевого пакета ---
     [HarmonyPatch(typeof(PlayerClothing), nameof(PlayerClothing.ServerSetVisualToggleState))]
     public class Patch_ServerSetVisualToggleState
     {
         public static bool Prefix(PlayerClothing __instance, EVisualToggleType type, ref bool isVisible)
         {
-            // Если пытаются включить что-либо на голове при 0% прочности
-            if (isVisible && __instance.glassesAsset != null && __instance.glassesQuality <= 0)
+            // В ваниле ПНВ и Фонари — это индекс 1 (VISION)
+            if (isVisible && (int)type == 1) 
             {
-                var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == __instance.glassesAsset.id);
-                if (config != null)
+                if (__instance.glassesAsset != null && __instance.glassesQuality <= 0)
                 {
-                    // 1. Запрещаем визуальный стейт
-                    isVisible = false;
-
-                    // 2. ЖЕСТКО зануляем байт состояния (обычно это индекс 0)
-                    if (__instance.glassesState != null && __instance.glassesState.Length > 0)
+                    var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == __instance.glassesAsset.id);
+                    if (config != null)
                     {
-                        __instance.glassesState[0] = 0;
-                    }
+                        // Принудительно ставим ложь
+                        isVisible = false;
+                        
+                        // Обнуляем байт состояния в массиве
+                        if (__instance.glassesState != null && __instance.glassesState.Length > 0)
+                            __instance.glassesState[0] = 0;
 
-                    // 3. Синхронизируем стейт через "тяжелый" пакет
-                    __instance.sendUpdateGlassesState();
-                    return false; // Отменяем выполнение оригинального метода, мы всё сделали сами
+                        // Синхронизируем стейт байтов
+                        __instance.sendUpdateGlassesState();
+                    }
                 }
             }
             return true;
         }
     }
 
-    // 2. ПАТЧ НА ПОТЕРЮ ПРОЧНОСТИ (Когда заряд сел в 0)
+    // --- УРОВЕНЬ 2: Блокировка самого Unity-света (Ядро) ---
+    [HarmonyPatch(typeof(Player), nameof(Player.updateGlassesLights))]
+    public class Patch_updateGlassesLights
+    {
+        // Этот метод вызывается игрой, чтобы включить/выключить модельку света
+        public static void Prefix(Player __instance, ref bool isVisible)
+        {
+            if (isVisible && __instance.clothing.glassesAsset != null && __instance.clothing.glassesQuality <= 0)
+            {
+                var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == __instance.clothing.glassesAsset.id);
+                if (config != null)
+                {
+                    // "Перерезаем провода": даже если игра хочет зажечь свет, мы передаем false
+                    isVisible = false;
+                }
+            }
+        }
+    }
+
+    // --- УРОВЕНЬ 3: Авто-выключение при разрядке ---
     [HarmonyPatch(typeof(PlayerClothing), nameof(PlayerClothing.sendUpdateGlassesQuality))]
     public class Patch_sendUpdateGlassesQuality
     {
@@ -42,31 +61,17 @@ namespace HeadLamp
         {
             if (__instance.glassesAsset != null && __instance.glassesQuality <= 0)
             {
-                // Проверяем, горит ли свет
+                // Если заряд 0, а свет всё ещё числится включенным в байтах
                 if (__instance.glassesState != null && __instance.glassesState.Length > 0 && __instance.glassesState[0] != 0)
                 {
                     var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == __instance.glassesAsset.id);
                     if (config != null)
                     {
-                        // ТУТ ИДЕТ СИЛОВАЯ ПЕРЕЗАПИСЬ
+                        // Гасим всё
                         __instance.glassesState[0] = 0;
-
-                        // Вызываем все возможные методы синхронизации:
-                        // а) Выключаем визуал (пробуем все индексы 0, 1, 2 на всякий случай)
-                        __instance.ServerSetVisualToggleState((EVisualToggleType)0, false);
                         __instance.ServerSetVisualToggleState((EVisualToggleType)1, false);
-                        __instance.ServerSetVisualToggleState((EVisualToggleType)2, false);
-
-                        // б) Отправляем обновленный стейт байтов
+                        __instance.player.updateGlassesLights(false);
                         __instance.sendUpdateGlassesState();
-
-                        // в) ФИНАЛЬНЫЙ УДАР: Полная переотправка предмета игроку через внутренний RPC
-                        // Это заставит Unity-модельку фонаря пересоздаться в выключенном состоянии
-                        __instance.player.clothing.askUpdateGlasses(
-                            __instance.glassesAsset.id, 
-                            0, 
-                            __instance.glassesState
-                        );
                     }
                 }
             }
