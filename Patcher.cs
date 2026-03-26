@@ -26,7 +26,7 @@ namespace HeadLamp
                     // ПЕРЕОДЕВАЕМ
                     __instance.askWearGlasses(id, 0, newState, true);
 
-                    // ЧИСТКА ИНВЕНТАРЯ
+                    // 1. ЧИСТИМ ИНВЕНТАРЬ
                     for (byte page = 0; page < PlayerInventory.PAGES; page++)
                     {
                         var items = __instance.player.inventory.items[page];
@@ -42,22 +42,23 @@ namespace HeadLamp
                         }
                     }
 
-                    // ЧИСТКА ЗЕМЛИ (через .instance)
-                    List<RegionCoordinate> regions = new List<RegionCoordinate>();
-                    Regions.getRegionsInRadius(__instance.player.transform.position, 1f, regions);
-                    foreach (var region in regions)
+                    // 2. ЧИСТКА ЗЕМЛИ (Через статический ItemManager)
+                    // Мы просто говорим серверу: "Удали все севшие фонари в радиусе 2 метров"
+                    byte x, y;
+                    if (Regions.tryGetCoordinate(__instance.player.transform.position, out x, out y))
                     {
-                        var items = ItemManager.regions[region.x, region.y].items;
-                        for (int i = items.Count - 1; i >= 0; i--)
+                        var region = ItemManager.regions[x, y];
+                        for (int i = region.items.Count - 1; i >= 0; i--)
                         {
-                            var drop = items[i];
-                            if (drop.item.id == id && drop.item.quality == 0)
+                            var itemData = region.items[i];
+                            if (itemData.item.id == id && itemData.item.quality == 0)
                             {
-                                // ИСПРАВЛЕНИЕ: Используем .instance вместо .manager
-                                ItemManager.instance.askTakeItem(__instance.player.channel.owner.playerID.steamID, region.x, region.y, drop.instanceID, 0, 0, 0, 0);
+                                // Прямое удаление из списка региона - самый надежный способ без instance
+                                ItemManager.removeItem(x, y, (uint)i);
                             }
                         }
                     }
+
                     return false;
                 }
             }
