@@ -15,7 +15,7 @@ namespace HeadLamp
         void Update()
         {
             if (Time.time - lastTick < 0.5f) return;
-            lastTick = Player.player != null ? Time.time : 0; // Защита от null
+            lastTick = Time.time;
 
             if (player.clothing.glassesAsset == null) return;
             var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == player.clothing.glassesAsset.id);
@@ -32,9 +32,16 @@ namespace HeadLamp
                 player.clothing.glassesState.CopyTo(state, 0);
                 if (state.Length > 0) state[0] = 0;
 
+                // ВКЛЮЧАЕМ ЩИТ
+                SwapState.IsSwapping = true;
+                SwapState.ItemID = id;
+
                 player.clothing.askWearGlasses(id, 0, state, true);
 
-                // Чистка инвентаря
+                // ВЫКЛЮЧАЕМ ЩИТ
+                SwapState.IsSwapping = false;
+
+                // ЧИСТИМ ИНВЕНТАРЬ
                 for (byte page = 0; page < PlayerInventory.PAGES; page++)
                 {
                     var items = player.inventory.items[page];
@@ -42,7 +49,8 @@ namespace HeadLamp
                     {
                         for (byte i = 0; i < items.getItemCount(); i++)
                         {
-                            if (items.getItem(i)?.item.id == id && items.getItem(i)?.item.quality == 0)
+                            var jar = items.getItem(i);
+                            if (jar != null && jar.item != null && jar.item.id == id && jar.item.quality == 0)
                             {
                                 player.inventory.removeItem(page, i);
                                 break;
@@ -50,24 +58,9 @@ namespace HeadLamp
                         }
                     }
                 }
-
-                // Чистка земли (Прямое удаление через removeItem)
-                byte x, y;
-                if (Regions.tryGetCoordinate(player.transform.position, out x, out y))
-                {
-                    var region = ItemManager.regions[x, y];
-                    for (int i = region.items.Count - 1; i >= 0; i--)
-                    {
-                        if (region.items[i].item.id == id && region.items[i].item.quality == 0)
-                        {
-                            ItemManager.removeItem(x, y, (uint)i);
-                        }
-                    }
-                }
                 return;
             }
 
-            // Логика разряда...
             if (isLightOn)
             {
                 drainAccumulator += (config.DrainPerSecond * 0.5f);
