@@ -2,10 +2,32 @@ using HarmonyLib;
 using SDG.Unturned;
 using System.Linq;
 using UnityEngine;
-using System.Collections.Generic;
 
 namespace HeadLamp
 {
+    // Статический класс-сигнализация для общения между нашими скриптами
+    public static class SwapState
+    {
+        public static bool IsSwapping = false;
+        public static ushort ItemID = 0;
+    }
+
+    // НОВЫЙ ПАТЧ: Перехватываем попытку игры выкинуть предмет
+    [HarmonyPatch(typeof(ItemManager), nameof(ItemManager.dropItem))]
+    public class Patch_ItemManager_dropItem
+    {
+        public static bool Prefix(Item item)
+        {
+            // Если мы прямо сейчас переодеваем фонарик, и игра пытается выкинуть его копию на землю...
+            if (SwapState.IsSwapping && item != null && item.id == SwapState.ItemID && item.quality == 0)
+            {
+                // ...мы отменяем выпадение! Предмет просто исчезает в небытие.
+                return false; 
+            }
+            return true; // В остальное время разрешаем выбрасывать предметы
+        }
+    }
+
     [HarmonyPatch(typeof(PlayerClothing), nameof(PlayerClothing.ServerSetVisualToggleState))]
     public class Patch_ServerSetVisualToggleState
     {
@@ -23,10 +45,17 @@ namespace HeadLamp
                     __instance.glassesState.CopyTo(newState, 0);
                     if (newState.Length > 0) newState[0] = 0;
 
-                    // ПЕРЕОДЕВАЕМ
+                    // 1. ВКЛЮЧАЕМ ЩИТ (защита от выпадения дюпа на землю)
+                    SwapState.IsSwapping = true;
+                    SwapState.ItemID = id;
+
+                    // 2. ПЕРЕОДЕВАЕМ
                     __instance.askWearGlasses(id, 0, newState, true);
 
-                    // 1. ЧИСТИМ ИНВЕНТАРЬ
+                    // 3. ВЫКЛЮЧАЕМ ЩИТ
+                    SwapState.IsSwapping = false;
+
+                    // 4. ЧИСТИМ ИНВЕНТАРЬ (если место было, дюп упал в рюкзак)
                     for (byte page = 0; page < PlayerInventory.PAGES; page++)
                     {
                         var items = __instance.player.inventory.items[page];
@@ -42,23 +71,7 @@ namespace HeadLamp
                         }
                     }
 
-                    // 2. ЧИСТКА ЗЕМЛИ (Через статический ItemManager)
-                    // Мы просто говорим серверу: "Удали все севшие фонари в радиусе 2 метров"
-                    byte x, y;
-                    if (Regions.tryGetCoordinate(__instance.player.transform.position, out x, out y))
-                    {
-                        var region = ItemManager.regions[x, y];
-                        for (int i = region.items.Count - 1; i >= 0; i--)
-                        {
-                            var itemData = region.items[i];
-                            if (itemData.item.id == id && itemData.item.quality == 0)
-                            {
-                                // Прямое удаление из списка региона - самый надежный способ без instance
-                                ItemManager.removeItem(x, y, (uint)i);
-                            }
-                        }
-                    }
-
+                    // Чистить землю больше не нужно - патч не даст ему туда упасть!
                     return false;
                 }
             }
