@@ -1,7 +1,6 @@
 using SDG.Unturned;
 using UnityEngine;
 using System.Linq;
-using System.Collections.Generic;
 
 namespace HeadLamp
 {
@@ -16,7 +15,7 @@ namespace HeadLamp
         void Update()
         {
             if (Time.time - lastTick < 0.5f) return;
-            lastTick = Time.time;
+            lastTick = Player.player != null ? Time.time : 0; // Защита от null
 
             if (player.clothing.glassesAsset == null) return;
             var config = HeadLamp.Instance.Configuration.Instance.Lamps.FirstOrDefault(x => x.ItemID == player.clothing.glassesAsset.id);
@@ -35,39 +34,40 @@ namespace HeadLamp
 
                 player.clothing.askWearGlasses(id, 0, state, true);
 
+                // Чистка инвентаря
                 for (byte page = 0; page < PlayerInventory.PAGES; page++)
                 {
                     var items = player.inventory.items[page];
-                    if (items == null) continue;
-                    for (byte i = 0; i < items.getItemCount(); i++)
+                    if (items != null)
                     {
-                        var jar = items.getItem(i);
-                        if (jar != null && jar.item != null && jar.item.id == id && jar.item.quality == 0)
+                        for (byte i = 0; i < items.getItemCount(); i++)
                         {
-                            player.inventory.removeItem(page, i);
-                            break;
+                            if (items.getItem(i)?.item.id == id && items.getItem(i)?.item.quality == 0)
+                            {
+                                player.inventory.removeItem(page, i);
+                                break;
+                            }
                         }
                     }
                 }
 
-                List<RegionCoordinate> regions = new List<RegionCoordinate>();
-                Regions.getRegionsInRadius(player.transform.position, 1f, regions);
-                foreach (var region in regions)
+                // Чистка земли (Прямое удаление через removeItem)
+                byte x, y;
+                if (Regions.tryGetCoordinate(player.transform.position, out x, out y))
                 {
-                    var items = ItemManager.regions[region.x, region.y].items;
-                    for (int i = items.Count - 1; i >= 0; i--)
+                    var region = ItemManager.regions[x, y];
+                    for (int i = region.items.Count - 1; i >= 0; i--)
                     {
-                        var drop = items[i];
-                        if (drop.item.id == id && drop.item.quality == 0)
+                        if (region.items[i].item.id == id && region.items[i].item.quality == 0)
                         {
-                            // ИСПРАВЛЕНИЕ: Используем .instance вместо .manager
-                            ItemManager.instance.askTakeItem(player.channel.owner.playerID.steamID, region.x, region.y, drop.instanceID, 0, 0, 0, 0);
+                            ItemManager.removeItem(x, y, (uint)i);
                         }
                     }
                 }
                 return;
             }
 
+            // Логика разряда...
             if (isLightOn)
             {
                 drainAccumulator += (config.DrainPerSecond * 0.5f);
